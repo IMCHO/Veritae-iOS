@@ -1,0 +1,15 @@
+// Veritae 인증 — Debug 구성 (ADR-0001, PRD iOS-1)
+//
+// 주의: xcconfig는 `//`를 주석 시작으로 해석한다.
+// `VERITAE_API_SCHEME = http://localhost:8080`처럼 스킴+호스트를 한 값으로 쓰면
+// `http:`로 잘린다. 그래서 스킴과 호스트를 분리 정의하고 코드(AppConfig)에서 조립한다.
+
+VERITAE_API_SCHEME = http
+VERITAE_API_HOST = localhost:8080
+
+// 실측 결과: GENERATE_INFOPLIST_FILE = YES 환경에서 INFOPLIST_KEY_<Key>는 Apple이 미리 아는
+// 표준 키(UILaunchScreen 등)만 생성된 Info.plist에 반영된다 — 임의의 커스텀 키는 반영되지
+// 않는다(빌드 성공 후 Info.plist를 직접 확인해 확인됨, 추론이 아니다). 그래서 대신 부분
+// Info.plist(Config/Debug-Info.plist)를 INFOPLIST_FILE로 병합하고, 그 안에서
+// $(VERITAE_API_SCHEME)/$(VERITAE_API_HOST) 빌드 설정 치환을 쓴다.
+INFOPLIST_FILE = Config/Debug-Info.plist

@@ -1,0 +1,11 @@
+// Veritae 인증 — Release 구성 (ADR-0001, PRD iOS-1)
+// 도메인 `[확인필요]` — 명세 오류 예시의 `type` 필드(https://api.veritae.app/errors/validation)에서
+// 유추한 값이다. 실제 배포 도메인이 확정되면 이 한 줄만 바꾸면 된다 (PRD 미결 4).
+
+VERITAE_API_SCHEME = https
+VERITAE_API_HOST = api.veritae.app
+
+// Debug.xcconfig와 동일한 이유로 부분 Info.plist를 병합한다 — 단 ATS 예외는 없다.
+INFOPLIST_FILE = Config/Release-Info.plist
+
+// ATS 예외 없음 — Release 산출물에는 평문 http 허용이 포함되지 않는다 (ADR-0001).
