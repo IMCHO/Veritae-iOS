@@ -36,8 +36,16 @@ struct AccountView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(.tint.opacity(0.8))
 
-            Text(appState.userEmail ?? "알 수 없음")
-                .font(.headline)
+            VStack(spacing: 4) {
+                Text(appState.authStore.member?.nickname ?? "알 수 없음")
+                    .font(.headline)
+
+                if let email = appState.authStore.member?.email {
+                    Text(email)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Button(role: .destructive) {
                 dismiss()
@@ -134,7 +142,25 @@ struct HistoryRow: View {
     }
 }
 
-#Preview {
-    AccountView()
-        .environment(AppState())
+#if DEBUG
+// M8: `#if DEBUG`로 감싸는 이유 — `#Preview` 본문은 Release 빌드에서도 타입체크되는데
+// `MockAuthAPI`/`InMemoryTokenStore`는 의도적으로 DEBUG 전용이다(실측: 없이 했다가
+// Release 빌드가 "cannot find 'MockAuthAPI' in scope"로 실패했다).
+//
+// 준비 코드를 `#Preview`의 트레일링 클로저 밖, 평범한 함수로 뺀 이유: 그 클로저는
+// `@ViewBuilder`라 `let` 선언 + void를 반환하는 메서드 호출(`debugSetMember`) + View 표현식을
+// 섞으면 컴파일러가 내부 오류("failed to produce diagnostic for expression")로 죽는다(실측).
+@MainActor
+private func makePreviewAppStateWithMember() -> AppState {
+    let authStore = AuthStore(api: MockAuthAPI(), tokenStore: InMemoryTokenStore())
+    authStore.debugSetMember(MemberDTO(id: "preview-id", email: "preview@veritae.app", nickname: "프리뷰"))
+    return AppState(authStore: authStore)
 }
+
+#Preview {
+    // M8: 프로필 카드가 빈 값("알 수 없음")으로 보이지 않도록 member가 이미 채워진
+    // `AppState`를 주입한다.
+    AccountView()
+        .environment(makePreviewAppStateWithMember())
+}
+#endif

@@ -257,7 +257,11 @@ struct SourcePreview: View {
     }
 }
 
+#if DEBUG
+// M8: `MockAuthAPI`/`InMemoryTokenStore`는 DEBUG 전용이라 프리뷰도 맞춰 감싼다
+// (실측: 없이 했다가 Release 빌드가 "cannot find 'MockAuthAPI' in scope"로 실패했다).
 #Preview {
     MainView()
-        .environment(AppState())
+        .environment(AppState(authStore: AuthStore(api: MockAuthAPI(), tokenStore: InMemoryTokenStore())))
 }
+#endif

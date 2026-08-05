@@ -177,61 +177,36 @@ enum AppPhase {
     case main
 }
 
+/// `phase`(화면 단계)와 `records`(분석 기록)만 소유하고, 인증은 `AuthStore`에 위임한다(ADR-0005).
+/// `AuthStore`를 별도로 환경 주입하지 않고 이 타입이 조합해 주입 지점을 하나로 유지한다
+/// (`ContentView.swift`가 유일한 실주입 지점, 프리뷰 5곳은 기본 인자로 동작).
 @Observable
 final class AppState {
     var phase: AppPhase = .splash
-    var userEmail: String?
     var records: [AnalysisRecord] = []
+    let authStore: AuthStore
 
-    /// 스플래시 종료 후 다음 화면 결정
-    func finishSplash() {
-        phase = userEmail == nil ? .login : .main
+    @MainActor
+    init(authStore: AuthStore) {
+        self.authStore = authStore
     }
 
-    /// 로그인 (Mock: 서버 검증 흉내)
-    func signIn(email: String, password: String) async throws {
-        try await Task.sleep(for: .seconds(1))
-        guard email.contains("@"), password.count >= 8 else {
-            throw AuthError.invalidCredentials
-        }
-        userEmail = email
-        phase = .main
+    /// 기본 인자로 `AuthStore(api: AppConfig.makeAuthAPI())`를 만들고 싶지만, default parameter
+    /// value 표현식은 (모듈 전체가 MainActor 기본 격리라도) 항상 nonisolated 컨텍스트로 컴파일된다.
+    /// `AuthStore.init`은 `@MainActor`라 그 위치에서 직접 호출할 수 없어, `@MainActor` 본문을
+    /// 가진 convenience init으로 옮긴다 — 6개 호출부(`AppState()`, `ContentView.swift`/프리뷰 5곳)는
+    /// 그대로 `AppState()`만 쓰면 된다(ADR-0005).
+    @MainActor
+    convenience init() {
+        self.init(authStore: AuthStore(api: AppConfig.makeAuthAPI()))
     }
 
-    /// 회원가입 (Mock: 유일성/안전성 서버 확인 흉내)
-    func signUp(email: String, password: String) async throws {
-        try await Task.sleep(for: .seconds(1.2))
-        guard email.contains("@"), email.contains(".") else {
-            throw AuthError.invalidEmail
-        }
-        guard password.count >= 8 else {
-            throw AuthError.weakPassword
-        }
-        // 이미 사용 중인 이메일 흉내
-        if email.lowercased().hasPrefix("taken") {
-            throw AuthError.emailTaken
-        }
-    }
-
+    /// 클라이언트 전용 로그아웃(ADR-0002) — 서버 호출 없음. 계정 화면 버튼 동작은 유지.
     func signOut() {
-        userEmail = nil
-        records.removeAll()
-        phase = .login
-    }
-}
-
-enum AuthError: LocalizedError {
-    case invalidCredentials
-    case invalidEmail
-    case weakPassword
-    case emailTaken
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidCredentials: "이메일 또는 비밀번호를 확인해 주세요."
-        case .invalidEmail: "올바른 이메일 형식이 아닙니다."
-        case .weakPassword: "비밀번호는 8자 이상이어야 합니다."
-        case .emailTaken: "이미 사용 중인 이메일입니다."
+        Task {
+            await authStore.signOut()
+            records.removeAll()
+            phase = .login
         }
     }
 }
