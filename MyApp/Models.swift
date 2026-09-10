@@ -37,6 +37,12 @@ struct AnalysisInput: Equatable {
     var title: String
     var subtitle: String
     var previewImage: UIImage?
+    /// 서버로 올릴 실제 바이트. 링크 입력은 대응 엔드포인트가 없어 항상 `nil` 이다.
+    ///
+    /// 사진은 **JPEG로 재인코딩된 결과**가 들어온다 — iPhone 기본 촬영 포맷(HEIC)을 그대로
+    /// 올리면 서버 `ImageAnalysisService`가 400 `INVALID_IMAGE_FILE`을 낸다(허용 형식은
+    /// jpeg/png/webp뿐). 변환 지점은 `MainView.loadPickedMedia`다.
+    var file: UploadFile?
 
     static func == (lhs: AnalysisInput, rhs: AnalysisInput) -> Bool {
         lhs.kind == rhs.kind && lhs.title == rhs.title && lhs.subtitle == rhs.subtitle
@@ -74,7 +80,10 @@ struct EvidenceItem: Identifiable {
     var icon: String
     var title: String
     var detail: String
-    var severity: RiskLevel
+    /// **옵셔널이다.** 서버 `Evidence` 스키마에는 심각도가 없다 — 전체 `score`로 개별 근거의
+    /// 심각도를 계산해 붙이면 서버가 말하지 않은 것을 지어내는 것이 된다. `nil`이면 UI가
+    /// 뱃지를 감춘다.
+    var severity: RiskLevel?
 }
 
 /// 하나의 분석 기록
@@ -83,10 +92,23 @@ struct AnalysisRecord: Identifiable {
     var date: Date
     var input: AnalysisInput
     var aiProbability: Double        // 0.0 ~ 1.0
-    var riskLevel: RiskLevel
     var summary: String
     var aiEvidence: [EvidenceItem]   // AI 판독 근거
-    var riskEvidence: [EvidenceItem] // 위험도 분석
+    /// 탐지에 사용된 모델 이름 (`spai` / `antideepfake` / `dfdc`).
+    var model: String
+    /// 판독 근거 히트맵(영상 전용, base64 PNG를 디코딩한 것). 서버가 best-effort로 주므로
+    /// 항상 `nil`일 수 있다 — 이미지/음성은 언제나 `nil`이다.
+    var evidenceImage: Data?
+
+    /// 사기 위험도. **실서버 경로에서는 항상 `nil`이다** — 서버에 사기 판정 엔드포인트가
+    /// 아예 없다(`docs/research/2026-09-10-fraud-detection-engines.md`). 목 모드에서만
+    /// 데모용으로 채워지고, `nil`이면 UI가 카드·뱃지를 감춘다.
+    ///
+    /// 타입을 지우지 않고 옵셔널로 남긴 이유: 사기 엔진이 붙으면 값만 채우면 되고, 그때까지
+    /// 근거 없는 판정이 화면에 뜨는 일은 구조적으로 막힌다.
+    var riskLevel: RiskLevel?
+    /// 위험도 분석 근거. `riskLevel`과 같은 이유로 실서버 경로에서는 항상 빈 배열이다.
+    var riskEvidence: [EvidenceItem]
 
     var aiLevel: RiskLevel {
         switch aiProbability {
@@ -94,77 +116,6 @@ struct AnalysisRecord: Identifiable {
         case ..<0.7: .medium
         default: .high
         }
-    }
-}
-
-// MARK: - 분석 엔진 (Mock)
-
-/// 서버 연동 전까지 사용하는 가짜 분석 엔진
-enum AnalysisEngine {
-    static func analyze(_ input: AnalysisInput) async -> AnalysisRecord {
-        // 실제 서버 분석을 흉내 내는 지연
-        try? await Task.sleep(for: .seconds(3.2))
-
-        let probability = Double.random(in: 0.15...0.95)
-        let risk: RiskLevel = probability > 0.7 ? .high : (probability > 0.4 ? .medium : .low)
-
-        return AnalysisRecord(
-            date: .now,
-            input: input,
-            aiProbability: probability,
-            riskLevel: risk,
-            summary: probability > 0.5
-                ? "이 콘텐츠는 AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인하세요."
-                : "AI 생성 흔적이 뚜렷하지 않습니다. 다만 일부 구간에서 편집 흔적이 발견되었습니다.",
-            aiEvidence: [
-                EvidenceItem(
-                    icon: "waveform.path.ecg",
-                    title: "주파수 패턴 분석",
-                    detail: "고주파 영역에서 생성 모델 특유의 규칙적인 노이즈 패턴이 감지되었습니다. 자연 촬영물에서는 나타나기 어려운 분포입니다.",
-                    severity: probability > 0.5 ? .high : .low
-                ),
-                EvidenceItem(
-                    icon: "eye",
-                    title: "시각적 일관성 검사",
-                    detail: "조명 방향과 그림자의 물리적 일관성을 검사했습니다. 광원 대비 그림자 각도의 오차가 허용 범위 내에 있습니다.",
-                    severity: .low
-                ),
-                EvidenceItem(
-                    icon: "square.grid.3x3",
-                    title: "픽셀 경계 분석",
-                    detail: "객체 경계부에서 업스케일링 아티팩트가 부분적으로 관찰됩니다. 생성 후 후처리가 있었을 가능성이 있습니다.",
-                    severity: .medium
-                ),
-                EvidenceItem(
-                    icon: "doc.badge.gearshape",
-                    title: "메타데이터 검증",
-                    detail: "촬영 기기 정보(EXIF)가 제거되어 있습니다. 원본 출처를 확인할 수 없어 신뢰도 평가에 반영되었습니다.",
-                    severity: .medium
-                ),
-            ],
-            riskEvidence: [
-                EvidenceItem(
-                    icon: "person.crop.circle.badge.questionmark",
-                    title: "사칭 가능성",
-                    detail: "알려진 인물 데이터베이스와 대조한 결과 유사도가 낮아 특정 인물 사칭 정황은 발견되지 않았습니다.",
-                    severity: .low
-                ),
-                EvidenceItem(
-                    icon: "exclamationmark.bubble",
-                    title: "유포 이력",
-                    detail: risk == .high
-                        ? "동일하거나 유사한 콘텐츠가 사기 신고 커뮤니티에서 2건 보고된 이력이 있습니다."
-                        : "유사 콘텐츠의 사기 신고 이력이 확인되지 않았습니다.",
-                    severity: risk
-                ),
-                EvidenceItem(
-                    icon: "shield.lefthalf.filled",
-                    title: "종합 위험 평가",
-                    detail: "AI 생성 가능성, 유포 이력, 콘텐츠 맥락을 종합해 위험도를 산정했습니다. 금전 요구나 개인정보 요청과 함께 수신했다면 주의하세요.",
-                    severity: risk
-                ),
-            ]
-        )
     }
 }
 
@@ -185,10 +136,14 @@ final class AppState {
     var phase: AppPhase = .splash
     var records: [AnalysisRecord] = []
     let authStore: AuthStore
+    /// 분석 실행 스토어. **`AppState`가 소유해야 한다** — 모달이 소유하면 사용자가 화면을
+    /// 닫는 순간 진행 중인 영상 `jobId`가 사라지고, 서버는 계속 분석하는데 결과를 받을 길이 없어진다.
+    let analysisStore: AnalysisStore
 
     @MainActor
-    init(authStore: AuthStore) {
+    init(authStore: AuthStore, analysisAPI: AnalysisAPI) {
         self.authStore = authStore
+        self.analysisStore = AnalysisStore(api: analysisAPI, authStore: authStore)
     }
 
     /// 기본 인자로 `AuthStore(api: AppConfig.makeAuthAPI())`를 만들고 싶지만, default parameter
@@ -198,7 +153,10 @@ final class AppState {
     /// 그대로 `AppState()`만 쓰면 된다(ADR-0005).
     @MainActor
     convenience init() {
-        self.init(authStore: AuthStore(api: AppConfig.makeAuthAPI()))
+        self.init(
+            authStore: AuthStore(api: AppConfig.makeAuthAPI()),
+            analysisAPI: AppConfig.makeAnalysisAPI()
+        )
     }
 
     /// 클라이언트 전용 로그아웃(ADR-0002) — 서버 호출 없음. 계정 화면 버튼 동작은 유지.

@@ -36,6 +36,21 @@ enum AppConfig {
         return MockAuthAPI.Scenario(rawValue: raw)
     }
 
+    /// `-UseMockAnalysisAPI 1` 런치 인자로 전환되는 분석 목 모드.
+    ///
+    /// 탐지 서버가 미배포라 기본 개발 경로다. `AnalysisStore.demoRiskLevel`도 이 값을 보고
+    /// 데모용 사기 위험도를 채운다 — Release에서는 이 프로퍼티 자체가 존재하지 않아
+    /// 근거 없는 위험도가 실사용자에게 노출될 수 없다.
+    static var isMockAnalysisAPIEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "UseMockAnalysisAPI")
+    }
+
+    /// `-MockAnalysisScenario <case>` 런치 인자 — 오류 케이스 재현용.
+    static var mockAnalysisScenario: MockAnalysisAPI.Scenario? {
+        guard let raw = UserDefaults.standard.string(forKey: "MockAnalysisScenario") else { return nil }
+        return MockAnalysisAPI.Scenario(rawValue: raw)
+    }
+
 #endif
 
     /// 목/실 `AuthAPI` 전환 지점 (ADR-0001).
@@ -47,5 +62,16 @@ enum AppConfig {
         }
         #endif
         return LiveAuthAPI(baseURL: baseURL)
+    }
+
+    /// 목/실 `AnalysisAPI` 전환 지점. `makeAuthAPI()`와 같은 구조다 —
+    /// Release 에서는 분기가 컴파일되지 않아 항상 `LiveAnalysisAPI` 다.
+    static func makeAnalysisAPI() -> AnalysisAPI {
+        #if DEBUG
+        if isMockAnalysisAPIEnabled {
+            return MockAnalysisAPI(scenario: mockAnalysisScenario)
+        }
+        #endif
+        return LiveAnalysisAPI(baseURL: baseURL)
     }
 }

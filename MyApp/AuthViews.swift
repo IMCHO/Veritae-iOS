@@ -359,6 +359,6 @@ struct AuthFieldRow<Content: View>: View {
 // Release 빌드가 "cannot find 'MockAuthAPI' in scope"로 실패했다).
 #Preview {
     LoginFlowView()
-        .environment(AppState(authStore: AuthStore(api: MockAuthAPI(), tokenStore: InMemoryTokenStore())))
+        .environment(AppState(authStore: AuthStore(api: MockAuthAPI(), tokenStore: InMemoryTokenStore()), analysisAPI: MockAnalysisAPI()))
 }
 #endif

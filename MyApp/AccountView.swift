@@ -128,9 +128,16 @@ struct HistoryRow: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(record.aiLevel.color)
 
-                Text(record.riskLevel.label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(record.riskLevel.color)
+                // 사기 위험도는 서버에 판정 근거가 없으면 `nil`이다 — 그때는 줄을 아예 감춘다.
+                if let riskLevel = record.riskLevel {
+                    Text(riskLevel.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(riskLevel.color)
+                } else {
+                    Text(record.model)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             Image(systemName: "chevron.right")
@@ -154,7 +161,7 @@ struct HistoryRow: View {
 private func makePreviewAppStateWithMember() -> AppState {
     let authStore = AuthStore(api: MockAuthAPI(), tokenStore: InMemoryTokenStore())
     authStore.debugSetMember(MemberDTO(id: "preview-id", email: "preview@veritae.app", nickname: "프리뷰"))
-    return AppState(authStore: authStore)
+    return AppState(authStore: authStore, analysisAPI: MockAnalysisAPI())
 }
 
 #Preview {

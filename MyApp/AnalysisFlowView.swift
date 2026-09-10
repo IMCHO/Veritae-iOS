@@ -9,38 +9,58 @@ struct AnalysisFlowView: View {
     let input: AnalysisInput
     var onFinish: () -> Void
 
-    @State private var record: AnalysisRecord?
+    private var store: AnalysisStore { appState.analysisStore }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground()
 
-                if let record {
+                switch store.phase {
+                case .finished(let record):
                     ResultView(record: record) {
                         onFinish()
                         dismiss()
                     }
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                } else {
-                    AnalyzingView(input: input)
+
+                case .failed(let error):
+                    FailureView(
+                        error: error,
+                        onRetry: error.isRetryable ? { Task { await run() } } : nil,
+                        onClose: {
+                            onFinish()
+                            dismiss()
+                        }
+                    )
+                    .transition(.opacity)
+
+                case .running(let stage):
+                    AnalyzingView(input: input, stage: stage)
                         .transition(.opacity)
                 }
             }
+            .animation(.smooth(duration: 0.4), value: store.isFinished)
             .navigationDestination(for: AnalysisRecord.ID.self) { _ in
-                if let record {
+                if case .finished(let record) = store.phase {
                     DetailView(record: record)
                 }
             }
         }
-        .task {
-            let result = await AnalysisEngine.analyze(input)
-            appState.records.insert(result, at: 0)
-            withAnimation(.smooth(duration: 0.5)) {
-                record = result
-            }
+        .task { await run() }
+    }
+
+    /// 진행 중이던 영상 job이 있으면 이어서 폴링하고, 없으면 새로 분석한다.
+    /// 모달을 닫았다 다시 열었을 때 같은 작업을 두 번 접수하지 않기 위한 분기다.
+    private func run() async {
+        if store.pendingVideoJob != nil {
+            await store.resumePendingVideoJobIfNeeded()
+        } else {
+            await store.analyze(input)
         }
-        .interactiveDismissDisabled(record == nil)
+        if case .finished(let record) = store.phase {
+            appState.records.insert(record, at: 0)
+        }
     }
 }
 
@@ -48,15 +68,9 @@ struct AnalysisFlowView: View {
 
 struct AnalyzingView: View {
     let input: AnalysisInput
-
-    @State private var phaseIndex = 0
-
-    private let phases = [
-        "콘텐츠 확인 중…",
-        "AI 생성 패턴 분석 중…",
-        "위험 신호 대조 중…",
-        "결과 정리 중…",
-    ]
+    /// 서버가 실제로 어디까지 왔는지. 예전에는 문구 4개를 0.9초마다 돌렸는데, 그건 진행과
+    /// 무관한 연출이라 영상처럼 수 분 걸리는 작업에서 "결과 정리 중"에 멎어 있었다.
+    let stage: AnalysisStore.Stage
 
     var body: some View {
         VStack(spacing: 48) {
@@ -88,14 +102,16 @@ struct AnalyzingView: View {
             }
 
             VStack(spacing: 10) {
-                Text(phases[phaseIndex])
+                Text(stage.label)
                     .font(.headline)
                     .contentTransition(.opacity)
-                    .animation(.smooth, value: phaseIndex)
+                    .animation(.smooth, value: stage)
+                    .multilineTextAlignment(.center)
 
-                Text("잠시만 기다려 주세요")
+                Text(caption)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
             Spacer()
@@ -109,19 +125,69 @@ struct AnalyzingView: View {
                 pulse = true
             }
         }
-        .task {
-            // 진행 단계 문구를 주기적으로 교체
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(0.9))
-                if phaseIndex < phases.count - 1 {
-                    phaseIndex += 1
-                }
-            }
+    }
+
+    /// 영상은 수십 초~수 분이 걸릴 수 있어 기다림의 성격이 다르다 — 화면을 닫아도 된다는
+    /// 사실을 알려 준다(작업은 서버에서 계속된다).
+    private var caption: String {
+        switch stage {
+        case .queued, .processing:
+            "시간이 걸릴 수 있습니다.\n화면을 닫아도 분석은 계속됩니다."
+        case .preparing, .uploading, .analyzing:
+            "잠시만 기다려 주세요"
         }
     }
 
     @State private var rotation: Double = 0
     @State private var pulse = false
+}
+
+// MARK: - 분석 실패
+
+struct FailureView: View {
+    let error: AnalysisError
+    /// `nil`이면 재시도 버튼을 감춘다 — 파일 자체가 문제인 경우 같은 파일로 다시 시도해도
+    /// 결과가 같아서, 버튼을 두면 사용자를 헛돌게 만든다.
+    var onRetry: (() -> Void)?
+    var onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(.orange)
+
+            Text(error.errorDescription ?? "분석에 실패했습니다.")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+
+            VStack(spacing: 10) {
+                if let onRetry {
+                    Button(action: onRetry) {
+                        Text("다시 시도")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 36)
+                    }
+                    .buttonStyle(.glassProminent)
+                }
+
+                Button(action: onClose) {
+                    Text("닫기")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                }
+                .buttonStyle(.glass)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 24)
+    }
 }
 
 // MARK: - SC4 · 분석 결과
@@ -160,13 +226,32 @@ struct ResultView: View {
                             icon: "cpu"
                         )
 
-                        VerdictCard(
-                            title: "사기 위험도",
-                            value: record.riskLevel.label,
-                            caption: riskCaption,
-                            color: record.riskLevel.color,
-                            icon: "exclamationmark.shield"
-                        )
+                        // 사기 위험도는 서버에 판정 근거가 있을 때만 보여준다. 없으면 카드를
+                        // 감춘다 — 근거 없는 위험도를 노출하는 것이 사기예방 앱에서 가장 나쁘다.
+                        if let riskLevel = record.riskLevel {
+                            VerdictCard(
+                                title: "사기 위험도",
+                                value: riskLevel.label,
+                                caption: riskCaption(riskLevel),
+                                color: riskLevel.color,
+                                icon: "exclamationmark.shield"
+                            )
+                        }
+                    }
+
+                    // 영상 히트맵 — best-effort라 없을 수 있다.
+                    if let data = record.evidenceImage, let image = UIImage(data: data) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("판독 근거 히트맵")
+                                .font(.subheadline.weight(.semibold))
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .clipShape(.rect(cornerRadius: 12))
+                        }
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .cardStyle()
                     }
                 }
                 .padding(.bottom, 12)
@@ -185,8 +270,8 @@ struct ResultView: View {
         .padding(.vertical, 8)
     }
 
-    private var riskCaption: String {
-        switch record.riskLevel {
+    private func riskCaption(_ level: RiskLevel) -> String {
+        switch level {
         case .low: "특이 신호 없음"
         case .medium: "주의가 필요합니다"
         case .high: "신뢰하지 마세요"
@@ -232,10 +317,28 @@ struct VerdictCard: View {
     }
 }
 
+extension AnalysisStore {
+    /// `Phase`는 `Equatable`이 아니라 애니메이션 트리거로 쓸 수 없어, 전환 여부만 뽑아 쓴다.
+    var isFinished: Bool {
+        if case .running = phase { return false }
+        return true
+    }
+}
+
 #Preview("분석 중") {
     ZStack {
         AppBackground()
-        AnalyzingView(input: AnalysisInput(kind: .link, title: "https://example.com/photo.jpg", subtitle: "링크", previewImage: nil))
+        AnalyzingView(
+            input: AnalysisInput(kind: .photo, title: "IMG_3958.jpg", subtitle: "사진", previewImage: nil),
+            stage: .analyzing
+        )
+    }
+}
+
+#Preview("실패") {
+    ZStack {
+        AppBackground()
+        FailureView(error: .detectionServiceUnavailable, onRetry: {}, onClose: {})
     }
 }
 
@@ -249,21 +352,26 @@ struct VerdictCard: View {
 }
 
 extension AnalysisRecord {
-    /// 프리뷰용 샘플 데이터
+    /// 프리뷰용 샘플. 실서버 경로를 반영해 `riskLevel`은 `nil`, 근거는 서버 `Evidence`에서
+    /// 오는 형태(severity 없음)로 둔다.
     static var sample: AnalysisRecord {
         AnalysisRecord(
             date: .now,
-            input: AnalysisInput(kind: .link, title: "https://example.com/photo.jpg", subtitle: "링크", previewImage: nil),
+            input: AnalysisInput(kind: .video, title: "clip.mp4", subtitle: "영상", previewImage: nil),
             aiProbability: 0.82,
-            riskLevel: .medium,
-            summary: "이 콘텐츠는 AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인하세요.",
+            summary: "AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인해 주세요.",
             aiEvidence: [
-                EvidenceItem(icon: "waveform.path.ecg", title: "주파수 패턴 분석", detail: "고주파 영역에서 생성 모델 특유의 규칙적인 노이즈 패턴이 감지되었습니다.", severity: .high),
-                EvidenceItem(icon: "eye", title: "시각적 일관성 검사", detail: "조명 방향과 그림자의 물리적 일관성 오차가 허용 범위 내에 있습니다.", severity: .low),
+                EvidenceItem(
+                    icon: "waveform.path.ecg",
+                    title: "얼굴 경계 불일치",
+                    detail: "1.0초~2.5초 구간에서 얼굴 윤곽과 배경의 경계가 프레임마다 흔들림\n구간: 1.0초~2.5초",
+                    severity: nil
+                ),
             ],
-            riskEvidence: [
-                EvidenceItem(icon: "exclamationmark.bubble", title: "유포 이력", detail: "유사 콘텐츠의 사기 신고 이력이 확인되지 않았습니다.", severity: .medium),
-            ]
+            model: "dfdc",
+            evidenceImage: nil,
+            riskLevel: nil,
+            riskEvidence: []
         )
     }
 }
