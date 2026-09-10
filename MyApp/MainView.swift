@@ -15,8 +15,6 @@ struct MainView: View {
     @State private var showPhotoPicker = false
     @State private var showVideoPicker = false
     @State private var showFileImporter = false
-    /// 링크 입력은 대응 API가 없어 비활성이다 — 안내만 띄운다.
-    @State private var showLinkUnsupported = false
     /// 업로드 전 검증에서 걸린 사유. 서버 왕복 없이 즉시 안내한다.
     @State private var inputError: String?
 
@@ -59,11 +57,6 @@ struct MainView: View {
             if case .success(let url) = result {
                 loadPickedFile(url)
             }
-        }
-        .alert("아직 지원하지 않습니다", isPresented: $showLinkUnsupported) {
-            Button("확인", role: .cancel) {}
-        } message: {
-            Text("링크 분석은 준비 중입니다. 지금은 사진 · 영상 · 파일의 AI 생성 여부만 확인할 수 있습니다.")
         }
         .alert("분석할 수 없습니다", isPresented: .init(
             get: { inputError != nil },
@@ -156,18 +149,27 @@ struct MainView: View {
                     Button {
                         select(kind)
                     } label: {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 2) {
                             Image(systemName: kind.icon)
                                 .font(.system(size: 20, weight: .medium))
                             Text(kind.title)
                                 .font(.caption)
+                            // 준비 중임을 글자로 밝힌다. 흐리기만 하면 "왜 안 되는지"를
+                            // 눌러 봐야 알 수 있다.
+                            if isUnsupported(kind) {
+                                Text("준비 중")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
-                        // 링크는 준비 중이라 눌리긴 하되(안내 표시) 시각적으로 구분한다.
-                        .opacity(kind == .link ? 0.45 : 1)
                         .frame(maxWidth: .infinity)
                         .frame(height: 64)
                     }
                     .buttonStyle(.glass)
+                    // `.opacity` 만으로 흐리게 두면 `.glass` 버튼 스타일이 누를 때 자체
+                    // 하이라이트를 줘서 **눌리는 순간 활성 버튼처럼 밝아졌다가 되돌아온다.**
+                    // `.disabled` 는 그 터치 피드백까지 없애 상태가 흔들리지 않는다.
+                    .disabled(isUnsupported(kind))
                 }
             }
         }
@@ -190,13 +192,16 @@ struct MainView: View {
 
     // MARK: 액션
 
+    /// 대응 서버 엔드포인트가 없어 아직 못 받는 입력. 링크는 사기 판정 엔진이 붙을 때 함께 열린다.
+    private func isUnsupported(_ kind: SourceKind) -> Bool {
+        kind == .link
+    }
+
     private func select(_ kind: SourceKind) {
         switch kind {
         case .photo: showPhotoPicker = true
         case .video: showVideoPicker = true
-        // 링크는 대응 서버 엔드포인트가 없다. 입력을 받아 놓고 분석 단계에서 거절하는 대신
-        // 선택 시점에 바로 알린다 — 사기 판정 엔진이 붙을 때 함께 열린다.
-        case .link: showLinkUnsupported = true
+        case .link: break   // `.disabled` 라 도달하지 않는다.
         case .file: showFileImporter = true
         }
     }

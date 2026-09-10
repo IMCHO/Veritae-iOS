@@ -79,26 +79,19 @@ final class AuthStore {
     /// DEBUG 전용 화면 토글에서 서버 호출 없이 로그인된 화면을 흉내 낼 때만 쓴다(사용자 요청).
     /// Release 빌드에서는 `#if DEBUG`로 완전히 제외된다.
     ///
-    /// **더미 토큰도 함께 저장한다.** `member`만 세팅하면 화면은 로그인된 것처럼 보이는데
-    /// Keychain 은 비어 있어, 인증이 필요한 호출(analysis)이 전부 `noTokens` →
-    /// "세션이 만료되었습니다"로 떨어진다. 실제로 이 토글로 들어가 분석을 눌러 재현했다 —
-    /// 화면만 흉내 내면 그 화면에서 되는 일이 아무것도 없다.
+    /// **토큰은 저장하지 않는다.** 한때 더미 토큰을 함께 저장했는데, 그 토큰은 실서버에서
+    /// 절대 성공할 수 없으면서 Keychain 에 남아 다음 실행의 세션 복원을 네트워크 오류로
+    /// 떨어뜨렸다(시뮬레이터 Keychain 은 앱을 삭제해도 지워지지 않는다). 인증이 필요한
+    /// 기능을 목으로 시험하려면 목 모드에서 실제로 로그인해야 한다 —
+    /// `DebugModeSwitcher` 의 "목 계정 로그인" 이 그 경로를 태운다.
     func debugSetMember(_ member: MemberDTO) {
         self.member = member
-        Task {
-            do {
-                try await session.saveInitialTokens(
-                    TokenPairDTO(
-                        accessToken: "debug-access",
-                        refreshToken: "debug-refresh",
-                        tokenType: "Bearer",
-                        expiresIn: 1800
-                    )
-                )
-            } catch {
-                print("[Veritae][Debug] 더미 토큰 저장 실패 — \(error).")
-            }
-        }
+    }
+
+    /// 저장된 토큰을 지운다. 목 모드로 로그인한 뒤 실서버 모드로 돌아갈 때 필수다 —
+    /// 목 토큰이 남아 있으면 스플래시가 그 토큰으로 `members/me` 를 호출해 실패한다.
+    func debugClearTokens() async {
+        await signOut()
     }
     #endif
 }
