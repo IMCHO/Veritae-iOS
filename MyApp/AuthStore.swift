@@ -47,6 +47,19 @@ final class AuthStore {
         }
     }
 
+    /// 인증이 필요한 임의 호출(analysis)의 진입점. `AuthSession`을 외부에 노출하지 않아
+    /// 토큰 보유·갱신 책임이 이 타입 안에 남는다(ADR-0005).
+    ///
+    /// **오류를 `AuthError`로 매핑하지 않고 그대로 던진다.** 호출자(`AnalysisStore`)는 자기
+    /// 도메인 오류(`AnalysisError`)로 변환해야 하는데, 여기서 한 번 `AuthError`로 뭉개면
+    /// `INVALID_IMAGE_FILE` 같은 analysis 고유 코드가 "알 수 없는 오류"로 사라진다.
+    /// 401 계열은 `AuthSession`이 이미 refresh + 1회 재시도까지 마친 뒤 전파한 것이다(AC-11).
+    func withValidAccessToken<T: Sendable>(
+        _ body: @Sendable (String) async throws -> T
+    ) async throws -> T {
+        try await session.withValidAccessToken(body)
+    }
+
     /// 스플래시 세션 복원 (ADR-0008). `member`는 성공 시에만 갱신한다.
     func restoreSession() async -> AuthSession.RestoreResult {
         let result = await session.restoreSession()

@@ -118,16 +118,56 @@ actor AuthSession {
         }
     }
 
-    // MARK: - 내부: members/me 401 → refresh → 1회 재시도
+    // MARK: - 인증이 필요한 임의 호출 (analysis 진입점)
 
-    private func callMeWithRetry(accessToken: String, refreshToken: String) async throws -> MemberDTO {
+    /// 저장된 accessToken으로 `body`를 실행하고, `UNAUTHORIZED` 401이면 refresh 후 **1회만**
+    /// 재시도한다. analysis 호출 전부가 이 경로를 통과한다.
+    ///
+    /// 각 API가 스스로 갱신하게 두면 ADR-0007의 "in-flight refresh는 항상 1개" 불변식이 깨진다 —
+    /// 이미지 업로드와 영상 job 폴링이 동시에 401을 받는 상황이 정확히 그 경로다. 이 메서드를
+    /// 거치면 동시 호출자들이 `refreshAccessToken`의 단일 in-flight `Task`를 공유한다(AC-10).
+    ///
+    /// `body`는 `await` 지점이므로 그 사이 로그아웃이 끼어들 수 있다(LL-003). 토큰 재기록은
+    /// `refreshAccessToken`의 `clearGeneration` 가드가 막는다 — 로그아웃이 끼어들면 거기서
+    /// `CancellationError`로 빠지므로 여기서 따로 검사하지 않는다.
+    func withValidAccessToken<T: Sendable>(
+        _ body: @Sendable (String) async throws -> T
+    ) async throws -> T {
+        guard let tokens = try tokenStore.load() else {
+            throw AuthSessionError.noTokens
+        }
+        return try await retrying(
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            body
+        )
+    }
+
+    // MARK: - 내부: 401 → refresh → 1회 재시도
+
+    /// 401 재시도 규율의 **유일한 구현**. `authorizedMe`/`restoreSession`(members/me)과
+    /// analysis 호출이 같은 코드를 쓴다 — 두 벌로 두면 한쪽만 고쳐져 갈라진다.
+    private func retrying<T: Sendable>(
+        accessToken: String,
+        refreshToken: String,
+        _ body: @Sendable (String) async throws -> T
+    ) async throws -> T {
         do {
-            return try await api.me(accessToken: accessToken)
+            return try await body(accessToken)
         } catch let error as AuthAPIError {
             guard isUnauthorized(error) else { throw error }
             let newAccessToken = try await refreshAccessToken(currentRefreshToken: refreshToken)
             // 재시도는 여기서 끝 — 이 호출이 다시 401이어도 재귀하지 않고 그대로 전파한다(AC-11).
-            return try await api.me(accessToken: newAccessToken)
+            return try await body(newAccessToken)
+        }
+    }
+
+    private func callMeWithRetry(accessToken: String, refreshToken: String) async throws -> MemberDTO {
+        // `api`를 지역 상수로 꺼낸다 — 클로저 본문은 actor 외부에서 실행되므로 그 안에서
+        // `self.api`를 읽지 않는다.
+        let api = self.api
+        return try await retrying(accessToken: accessToken, refreshToken: refreshToken) {
+            try await api.me(accessToken: $0)
         }
     }
 
