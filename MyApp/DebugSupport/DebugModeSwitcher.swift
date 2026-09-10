@@ -13,19 +13,25 @@ import SwiftUI
 struct DebugModeSwitcher: View {
     @Environment(AppState.self) private var appState
     @State private var isExpanded = false
-    @State private var isMockMode = AppConfig.isMockModeEnabled
+    /// 지속 키가 아니라 **실효 모드**를 보여준다 — 런치 인자로 켜진 목도 목 모드다.
+    @State private var isMockMode = AppConfig.isMockAuthAPIEnabled
+    private let isForcedByLaunchArgument = AppConfig.isMockModeForcedByLaunchArgument
     @State private var isWorking = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if isExpanded {
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text(isMockMode ? "목 모드" : "실서버 모드")
+                    Text(modeLabel)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(isMockMode ? .orange : .green)
 
-                    debugButton(isMockMode ? "실서버 모드로" : "목 모드로") {
-                        Task { await switchMode(toMock: !isMockMode) }
+                    // 런치 인자가 이기므로 그 경우엔 토글을 비활성화한다 — 눌러도 안 바뀌는
+                    // 버튼을 두면 "고장난 것"으로 보인다.
+                    if !isForcedByLaunchArgument {
+                        debugButton(isMockMode ? "실서버 모드로" : "목 모드로") {
+                            Task { await switchMode(toMock: !isMockMode) }
+                        }
                     }
 
                     // 목 모드에서만 의미가 있다 — 실서버 모드에서 누르면 실제 서버로 로그인을
@@ -78,6 +84,13 @@ struct DebugModeSwitcher: View {
         // 위치는 정해주지 않는다 — 그래서 화면 정중앙에 떠서 컨텐츠를 가리고 탭을 가로챘다.
         // `.infinity` 프레임 + `.bottomTrailing`으로 이 뷰 스스로 화면 우하단에 붙인다.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+    }
+
+    private var modeLabel: String {
+        if isForcedByLaunchArgument {
+            return "목 모드 (런치 인자)"
+        }
+        return isMockMode ? "목 모드" : "실서버 모드"
     }
 
     private static let debugMember = MemberDTO(id: "debug-id", email: "debug@veritae.app", nickname: "디버그")

@@ -37,6 +37,16 @@ enum AppConfig {
         set { UserDefaults.standard.set(newValue, forKey: mockModeKey) }
     }
 
+    /// 런치 인자로 목이 켜져 있는가.
+    ///
+    /// 런치 인자는 `NSArgumentDomain` 에 등록돼 **항상 이긴다** — 이 경우 화면 토글로 끌 수 없다.
+    /// 그 사실을 오버레이가 표시하지 않으면 "목 모드인데 실서버 모드라고 나오고, 토글도 안 듣는다"
+    /// 는 혼란이 생긴다(실제로 겪었다). `DebugModeSwitcher` 가 이 값으로 토글을 비활성화한다.
+    nonisolated static var isMockModeForcedByLaunchArgument: Bool {
+        UserDefaults.standard.bool(forKey: "UseMockAuthAPI")
+            || UserDefaults.standard.bool(forKey: "UseMockAnalysisAPI")
+    }
+
     /// `-UseMockAuthAPI 1` 런치 인자 또는 화면에서 켠 목 모드 (ADR-0001, PRD iOS-4).
     /// Xcode의 `-Key Value` 형식 런치 인자는 `NSArgumentDomain`에 자동 등록되므로
     /// `UserDefaults`로 읽는 것이 표준 방식이다 — 직접 `ProcessInfo.arguments`를 파싱하지 않는다.
