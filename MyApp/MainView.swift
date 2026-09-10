@@ -210,21 +210,29 @@ struct MainView: View {
         guard let item else { return }
         Task {
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
-            guard let data = try? await item.loadTransferable(type: Data.self) else {
-                inputError = "선택한 항목을 읽을 수 없습니다."
-                return
-            }
-
-            let filename = item.supportedContentTypes.first?.preferredFilenameExtension
-                .map { isVideo ? "video.\($0)" : "image.\($0)" }
-                ?? (isVideo ? "video.mov" : "image.jpg")
 
             let file: UploadFile?
-            if isVideo {
-                file = UploadFileFactory.video(from: data, filename: filename)
-            } else {
-                // HEIC 촬영본을 JPEG로 재인코딩한다 — 하지 않으면 서버가 400으로 거절한다.
-                file = await UploadFileFactory.image(from: data, filename: filename)
+            do {
+                if isVideo {
+                    // **영상에 `loadTransferable(type: Data.self)` 를 쓰면 안 된다.** 영상은 수백 MB
+                    // 가 될 수 있어 메모리 `Data` 로 제공되지 않고 파일 URL 표현으로만 온다 —
+                    // 그래서 `Data` 로 요청하면 `nil` 이 돌아와 "선택한 항목을 읽을 수 없습니다"
+                    // 로 떨어졌다(사용자 보고 → 재현 확인). `PickedMovie` 가 파일로 받아 온다.
+                    file = try await UploadFileFactory.video(from: item)
+                } else {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        inputError = "선택한 항목을 읽을 수 없습니다."
+                        return
+                    }
+                    // HEIC 촬영본을 JPEG로 재인코딩한다 — 하지 않으면 서버가 400으로 거절한다.
+                    file = await UploadFileFactory.image(from: data)
+                }
+            } catch let error as UploadFileError {
+                inputError = error.message
+                return
+            } catch {
+                inputError = "선택한 항목을 읽을 수 없습니다."
+                return
             }
 
             guard let file else {
@@ -256,6 +264,9 @@ struct MainView: View {
             let file: UploadFile?
             do {
                 file = try await UploadFileFactory.fromFile(url: url)
+            } catch let error as UploadFileError {
+                inputError = error.message
+                return
             } catch {
                 inputError = "파일을 읽을 수 없습니다."
                 return

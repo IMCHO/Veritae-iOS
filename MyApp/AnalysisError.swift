@@ -116,17 +116,17 @@ enum AnalysisError: LocalizedError, Sendable {
 /// **서버가 상한을 늘리면 여기가 유효한 파일을 막는 회귀가 된다**(ADR-0004가 비밀번호에서
 /// 겪은 것과 같은 함정) — 그래서 형식은 정확히 대조하고 용량은 서버와 동일 값만 쓴다.
 enum UploadRule {
-    static let imageContentTypes: Set<String> = ["image/jpeg", "image/png", "image/webp"]
-    static let audioContentTypes: Set<String> = [
+    nonisolated static let imageContentTypes: Set<String> = ["image/jpeg", "image/png", "image/webp"]
+    nonisolated static let audioContentTypes: Set<String> = [
         "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/aac",
     ]
-    static let videoContentTypes: Set<String> = ["video/mp4", "video/quicktime", "video/x-msvideo"]
+    nonisolated static let videoContentTypes: Set<String> = ["video/mp4", "video/quicktime", "video/x-msvideo"]
 
-    static let audioMaxBytes = 25 * 1024 * 1024
-    static let videoMaxBytes = 100 * 1024 * 1024
+    nonisolated static let audioMaxBytes = 25 * 1024 * 1024
+    nonisolated static let videoMaxBytes = 100 * 1024 * 1024
 
     /// 업로드를 막아야 하면 사용자용 문구를 반환한다. `nil`이면 통과.
-    static func submitBlockingHint(for file: UploadFile) -> String? {
+    nonisolated static func submitBlockingHint(for file: UploadFile) -> String? {
         if file.data.isEmpty {
             return "빈 파일은 분석할 수 없습니다."
         }
