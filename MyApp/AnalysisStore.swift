@@ -222,6 +222,8 @@ final class AnalysisStore {
         }
     }
 
+    // TEMP-UNTIL-SERVER(demo-risk-level): 사기 판정 엔진이 붙으면 이 함수를 지우고
+    // `makeRecord` 의 `riskLevel:` 에 서버 값을 넣는다. `riskLevel` 프로퍼티 자체는 남긴다.
     /// 목 모드에서만 데모용 사기 위험도를 만든다.
     ///
     /// **Release에서는 `#if DEBUG`로 함수 본문이 사라져 항상 `nil`이다** — 서버에 사기 판정이

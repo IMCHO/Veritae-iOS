@@ -75,6 +75,8 @@ final class AuthStore {
         member = nil
     }
 
+    // TEMP-UNTIL-SERVER(debug-store-hooks): `debugSetMember` / `debugClearTokens`.
+    // `DebugModeSwitcher` 와 함께 삭제한다 — 다른 호출부는 없다.
     #if DEBUG
     /// DEBUG 전용 화면 토글에서 서버 호출 없이 로그인된 화면을 흉내 낼 때만 쓴다(사용자 요청).
     /// Release 빌드에서는 `#if DEBUG`로 완전히 제외된다.

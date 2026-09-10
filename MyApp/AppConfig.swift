@@ -20,6 +20,8 @@ enum AppConfig {
 
 #if DEBUG
 
+    // TEMP-UNTIL-SERVER(mock-mode-flag): 목 모드 플래그 3종 + mockModeKey. 실서버 배포 후 삭제한다.
+    // 삭제하면 `Switchable*API` 도 함께 삭제되고 `make*API()` 는 Live 만 반환하면 된다.
     /// 앱 안에서 켜고 끄는 목 모드. 런치 인자를 다시 주려면 Xcode 스킴을 고치고 재실행해야
     /// 하는데, 서버가 미배포인 동안은 목/실서버를 자주 왕복하게 되므로 화면에서 바꿀 수단이 필요하다.
     /// `DebugModeSwitcher` 가 이 값을 토글하고, `Switchable*API` 가 호출마다 이 값을 읽는다.
@@ -69,6 +71,8 @@ enum AppConfig {
 
 #endif
 
+    // TEMP-UNTIL-SERVER(api-factory): 아래 두 팩토리의 `#if DEBUG` 분기. 삭제 후에는 각각
+    // `LiveAuthAPI(baseURL:)` / `LiveAnalysisAPI(baseURL:)` 한 줄만 남긴다.
     /// 목/실 `AuthAPI` 전환 지점 (ADR-0001).
     ///
     /// DEBUG 에서는 **둘 다 들고 있는 래퍼**를 반환한다. 여기서 한쪽을 골라 반환하면 앱 시작

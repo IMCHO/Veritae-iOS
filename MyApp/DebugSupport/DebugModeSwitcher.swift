@@ -10,7 +10,7 @@ import SwiftUI
 /// **모드를 바꿀 때 저장된 토큰을 반드시 지운다.** 목 토큰은 실서버에서 절대 성공할 수 없는데
 /// Keychain 에 남아 다음 실행의 세션 복원을 "네트워크에 연결할 수 없습니다"로 떨어뜨린다
 /// (시뮬레이터 Keychain 은 앱을 삭제해도 지워지지 않아 앱 안에 탈출 수단이 없으면 갇힌다 — 실측).
-struct DebugAuthSwitcher: View {
+struct DebugModeSwitcher: View {
     @Environment(AppState.self) private var appState
     @State private var isExpanded = false
     @State private var isMockMode = AppConfig.isMockModeEnabled

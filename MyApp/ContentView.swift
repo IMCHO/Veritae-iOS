@@ -29,7 +29,7 @@ struct ContentView: View {
             }
 
             #if DEBUG
-            DebugAuthSwitcher()
+            DebugModeSwitcher()
             #endif
         }
         .animation(.smooth, value: appState.phase)
