@@ -212,16 +212,22 @@ struct MainView: View {
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
 
             let file: UploadFile?
+            var thumbnailData: Data?
             do {
                 if isVideo {
                     // **영상에 `loadTransferable(type: Data.self)` 를 쓰면 안 된다.** 영상은 수백 MB
                     // 가 될 수 있어 메모리 `Data` 로 제공되지 않고 파일 URL 표현으로만 온다 —
                     // 그래서 `Data` 로 요청하면 `nil` 이 돌아와 "선택한 항목을 읽을 수 없습니다"
                     // 로 떨어졌다(사용자 보고 → 재현 확인). `PickedMovie` 가 파일로 받아 온다.
-                    file = try await UploadFileFactory.video(from: item)
+                    let result = try await UploadFileFactory.video(from: item)
+                    file = result?.file
+                    thumbnailData = result?.thumbnailData
                 } else {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
-                        inputError = "선택한 항목을 읽을 수 없습니다."
+                        inputError = Self.diagnosing(
+                            "선택한 항목을 읽을 수 없습니다.",
+                            detail: "loadTransferable(Data) == nil, types=\(item.supportedContentTypes.map(\.identifier))"
+                        )
                         return
                     }
                     // HEIC 촬영본을 JPEG로 재인코딩한다 — 하지 않으면 서버가 400으로 거절한다.
@@ -231,22 +237,26 @@ struct MainView: View {
                 inputError = error.message
                 return
             } catch {
-                inputError = "선택한 항목을 읽을 수 없습니다."
+                inputError = Self.diagnosing("선택한 항목을 읽을 수 없습니다.", detail: "\(error)")
                 return
             }
 
             guard let file else {
-                inputError = "이 파일은 분석할 수 없습니다."
+                inputError = Self.diagnosing(
+                    "이 파일은 분석할 수 없습니다.",
+                    detail: "변환 실패 (isVideo=\(isVideo), types=\(item.supportedContentTypes.map(\.identifier)))"
+                )
                 return
             }
             if let hint = UploadRule.submitBlockingHint(for: file) {
                 // 업로드 전에 막는다 — 100MB 영상을 다 올린 뒤 거절당하는 것보다 낫다.
-                inputError = hint
+                inputError = Self.diagnosing(hint, detail: "contentType=\(file.contentType), bytes=\(file.data.count)")
                 return
             }
 
-            // 미리보기는 사진만 — 영상 썸네일 추출은 이번 범위 밖이다.
-            let preview = isVideo ? nil : UIImage(data: file.data)
+            let preview = isVideo
+                ? thumbnailData.flatMap(UIImage.init(data:))
+                : UIImage(data: file.data)
             withAnimation(.smooth) {
                 selectedInput = AnalysisInput(
                     kind: isVideo ? .video : .photo,
@@ -268,11 +278,11 @@ struct MainView: View {
                 inputError = error.message
                 return
             } catch {
-                inputError = "파일을 읽을 수 없습니다."
+                inputError = Self.diagnosing("파일을 읽을 수 없습니다.", detail: "\(error)")
                 return
             }
             guard let file else {
-                inputError = "이미지 · 음성 · 영상 파일만 분석할 수 있습니다."
+                inputError = Self.diagnosing("이미지 · 음성 · 영상 파일만 분석할 수 있습니다.", detail: "ext=\(url.pathExtension)")
                 return
             }
             if let hint = UploadRule.submitBlockingHint(for: file) {
@@ -290,6 +300,19 @@ struct MainView: View {
                 )
             }
         }
+    }
+
+    /// DEBUG 에서만 실패 원인을 문구에 덧붙인다.
+    ///
+    /// 입력 거절 사유가 6갈래인데 사용자에게는 다 비슷하게 보여서, "안 된다"는 보고만으로는
+    /// 어디서 막혔는지 좁힐 수 없었다(실제로 한 라운드를 이것 때문에 썼다). Release 문구는
+    /// 그대로 두고 개발 빌드에서만 원인을 드러낸다.
+    private static func diagnosing(_ message: String, detail: String) -> String {
+        #if DEBUG
+        return "\(message)\n\n[DEBUG] \(detail)"
+        #else
+        return message
+        #endif
     }
 
     private static func subtitle(for kind: UploadFile.Kind) -> String {

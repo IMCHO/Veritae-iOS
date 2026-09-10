@@ -88,9 +88,24 @@ private struct StubAuthAPI: AuthAPI {
 
 // MARK: - 테스트
 
-@Suite("AnalysisStore")
+/// `.serialized` — 이 스위트의 일부 테스트가 `AppConfig.isMockModeEnabled`(UserDefaults 전역)를
+/// 건드린다. 병렬로 돌면 서로의 설정을 덮어써 산발적으로 실패한다.
+@Suite("AnalysisStore", .serialized)
 @MainActor
 struct AnalysisStoreTests {
+
+    /// 목 모드 플래그를 강제하고 원래 값으로 되돌린다.
+    ///
+    /// **이게 없으면 테스트 결과가 "시뮬레이터에서 마지막으로 누른 토글"에 좌우된다.**
+    /// 실제로 겪었다 — 디버그 오버레이로 목 모드를 켜 둔 뒤 테스트를 돌리자
+    /// `riskLevel == nil` 단언이 깨졌다. 앱 컨테이너의 UserDefaults 를 테스트 프로세스가
+    /// 그대로 공유하기 때문이다.
+    private func withMockMode<T>(_ enabled: Bool, _ body: () async -> T) async -> T {
+        let previous = AppConfig.isMockModeEnabled
+        AppConfig.isMockModeEnabled = enabled
+        defer { AppConfig.isMockModeEnabled = previous }
+        return await body()
+    }
 
     private func makeStore(
         api: StubAnalysisAPI,
@@ -154,7 +169,8 @@ struct AnalysisStoreTests {
         let log = CallLog()
         let (store, _) = makeStore(api: StubAnalysisAPI(log: log), log: log)
 
-        await store.analyze(imageInput)
+        // 실서버 모드 기준 동작을 검증한다.
+        await withMockMode(false) { await store.analyze(imageInput) }
 
         guard case .finished(let record) = store.phase else {
             Issue.record("기대: finished, 실제: \(store.phase)")
@@ -164,8 +180,26 @@ struct AnalysisStoreTests {
         #expect(record.model == "spai")
         // SPAI 는 근거를 만들지 않는다.
         #expect(record.aiEvidence.isEmpty)
-        // 목 모드가 아니면 사기 위험도는 채워지지 않는다 — 서버에 판정 근거가 없다.
+        // **실서버 경로에서는 사기 위험도가 절대 채워지면 안 된다** — 서버에 판정 근거가 없다.
         #expect(record.riskLevel == nil)
+        #expect(record.riskEvidence.isEmpty)
+    }
+
+    /// 위 테스트의 짝. 목 모드에서만 데모용 위험도가 붙는다는 것을 **명시된 동작**으로 고정한다
+    /// (전에는 아무도 이걸 검증하지 않아, 플래그가 켜져 있으면 위 테스트가 조용히 깨졌다).
+    @Test("목 모드에서만 데모용 사기 위험도가 채워진다")
+    func demoRiskLevelOnlyInMockMode() async {
+        let log = CallLog()
+        let (store, _) = makeStore(api: StubAnalysisAPI(log: log), log: log)
+
+        await withMockMode(true) { await store.analyze(imageInput) }
+
+        guard case .finished(let record) = store.phase else {
+            Issue.record("기대: finished, 실제: \(store.phase)")
+            return
+        }
+        #expect(record.riskLevel != nil)
+        // 근거 카드는 목에서도 만들지 않는다 — 지어낼 내용이 없다.
         #expect(record.riskEvidence.isEmpty)
     }
 

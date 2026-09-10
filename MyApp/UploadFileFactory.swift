@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreTransferable
 import PhotosUI
 import SwiftUI
@@ -89,11 +90,22 @@ enum UploadFileFactory {
 
     // MARK: - 영상
 
-    /// PhotosPicker 영상 항목을 파일 URL 로 받아 `UploadFile` 로 만든다.
+    /// 영상 업로드 대상 + 미리보기 썸네일.
+    ///
+    /// 썸네일을 여기서 만드는 이유: 원본 파일 URL 이 있어야 프레임을 뽑을 수 있는데, 그 임시
+    /// 파일은 이 함수가 끝나면서 지워진다. 밖으로 URL 을 내보내면 수명 관리가 호출부로 새어
+    /// 나가므로, 필요한 것(바이트 + 썸네일)만 만들어 돌려준다.
+    nonisolated struct PickedVideoResult: Sendable {
+        let file: UploadFile
+        /// JPEG 바이트. 실패하면 `nil` — 썸네일이 없다고 분석을 막지는 않는다.
+        let thumbnailData: Data?
+    }
+
+    /// PhotosPicker 영상 항목을 파일 URL 로 받아 `UploadFile` + 썸네일로 만든다.
     ///
     /// **용량을 먼저 파일 속성으로 확인하고, 상한을 넘으면 읽지 않고 거절한다.** 100MB 초과
     /// 영상을 일단 메모리로 읽어 들이면 그 자체로 압박이 크다.
-    nonisolated static func video(from item: PhotosPickerItem) async throws -> UploadFile? {
+    nonisolated static func video(from item: PhotosPickerItem) async throws -> PickedVideoResult? {
         guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
             return nil
         }
@@ -114,13 +126,35 @@ enum UploadFileFactory {
         }
 
         let ext = movie.url.pathExtension.lowercased()
-        return UploadFile(
+        let file = UploadFile(
             kind: .video,
             filename: movie.url.lastPathComponent,
             // 확장자를 못 읽으면 mov 로 본다 — iOS 카메라 기본 컨테이너다.
             contentType: videoTypes[ext] ?? "video/quicktime",
             data: data
         )
+        return PickedVideoResult(file: file, thumbnailData: await thumbnail(for: movie.url))
+    }
+
+    /// 영상 첫 부분에서 한 프레임을 뽑아 JPEG 로 만든다.
+    ///
+    /// - `appliesPreferredTrackTransform` 이 없으면 세로로 찍은 영상이 눕는다.
+    /// - 정확히 0초를 요구하면 키프레임이 없는 영상에서 실패하므로 앞쪽 구간에서 허용 오차를 준다.
+    /// - 실패해도 `nil` 만 돌려준다 — 썸네일 때문에 분석을 막지 않는다.
+    private nonisolated static func thumbnail(for url: URL) async -> Data? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1024, height: 1024)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
+
+        do {
+            let (cgImage, _) = try await generator.image(at: .zero)
+            return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.8)
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - 파일 선택
