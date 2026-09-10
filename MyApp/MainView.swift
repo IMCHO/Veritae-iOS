@@ -17,6 +17,9 @@ struct MainView: View {
     @State private var showFileImporter = false
     /// 업로드 전 검증에서 걸린 사유. 서버 왕복 없이 즉시 안내한다.
     @State private var inputError: String?
+    /// 선택한 항목을 읽고 변환하는 중. 영상은 파일 복사 + 읽기 + 썸네일 추출까지 하므로
+    /// 실제로 수 초가 걸린다 — 그동안 아무 표시가 없으면 "눌러도 반응이 없다"로 보인다.
+    @State private var isPreparingInput = false
 
     var body: some View {
         ZStack {
@@ -97,7 +100,20 @@ struct MainView: View {
 
     @ViewBuilder
     private var previewArea: some View {
-        if let input = selectedInput {
+        if isPreparingInput {
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+
+                Text("선택한 항목을 준비하고 있습니다…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 220)
+            .cardStyle()
+            .transition(.opacity)
+        } else if let input = selectedInput {
             VStack(spacing: 16) {
                 SourcePreview(input: input, maxHeight: 280)
 
@@ -156,20 +172,26 @@ struct MainView: View {
                                 .font(.caption)
                             // 준비 중임을 글자로 밝힌다. 흐리기만 하면 "왜 안 되는지"를
                             // 눌러 봐야 알 수 있다.
-                            if isUnsupported(kind) {
-                                Text("준비 중")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
+                            //
+                            // **지원되는 버튼도 이 줄을 빈 문자열로 차지한다.** 조건부로
+                            // 넣고 빼면 내용 높이가 달라져서, 정사각형 변 길이가 버튼마다
+                            // 달라지고 링크만 원이 커진다(실측).
+                            Text(isUnsupported(kind) ? "준비 중" : " ")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.tertiary)
                         }
+                        // 높이를 고정하면 폭이 남아 타원이 된다. 가로를 균등 분배한 뒤
+                        // `aspectRatio(1, contentMode: .fit)` 로 정사각형을 만들어야
+                        // 기기 폭과 무관하게 정확한 원이 된다.
                         .frame(maxWidth: .infinity)
-                        .frame(height: 64)
+                        .aspectRatio(1, contentMode: .fit)
                     }
                     .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
                     // `.opacity` 만으로 흐리게 두면 `.glass` 버튼 스타일이 누를 때 자체
                     // 하이라이트를 줘서 **눌리는 순간 활성 버튼처럼 밝아졌다가 되돌아온다.**
                     // `.disabled` 는 그 터치 피드백까지 없애 상태가 흔들리지 않는다.
-                    .disabled(isUnsupported(kind))
+                    .disabled(isUnsupported(kind) || isPreparingInput)
                 }
             }
         }
@@ -187,7 +209,7 @@ struct MainView: View {
                 .frame(height: 36)
         }
         .buttonStyle(.glassProminent)
-        .disabled(selectedInput == nil)
+        .disabled(selectedInput == nil || isPreparingInput)
     }
 
     // MARK: 액션
@@ -209,6 +231,9 @@ struct MainView: View {
     private func loadPickedMedia(_ item: PhotosPickerItem?) {
         guard let item else { return }
         Task {
+            withAnimation(.smooth) { isPreparingInput = true }
+            defer { withAnimation(.smooth) { isPreparingInput = false } }
+
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
 
             let file: UploadFile?
@@ -271,6 +296,9 @@ struct MainView: View {
 
     private func loadPickedFile(_ url: URL) {
         Task {
+            withAnimation(.smooth) { isPreparingInput = true }
+            defer { withAnimation(.smooth) { isPreparingInput = false } }
+
             let file: UploadFile?
             do {
                 file = try await UploadFileFactory.fromFile(url: url)
