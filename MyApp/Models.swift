@@ -43,6 +43,9 @@ struct AnalysisInput: Equatable {
     /// 올리면 서버 `ImageAnalysisService`가 400 `INVALID_IMAGE_FILE`을 낸다(허용 형식은
     /// jpeg/png/webp뿐). 변환 지점은 `MainView.loadPickedMedia`다.
     var file: UploadFile?
+    /// 음성 파일의 RMS 파형(0~1). 선택 시점에 한 번 계산해 메인 미리보기와 결과 화면이 공유한다 —
+    /// 파일명만 보여주면 "무엇을 골랐는지"가 안 보인다.
+    var waveform: [Float]? = nil
 
     static func == (lhs: AnalysisInput, rhs: AnalysisInput) -> Bool {
         lhs.kind == rhs.kind && lhs.title == rhs.title && lhs.subtitle == rhs.subtitle

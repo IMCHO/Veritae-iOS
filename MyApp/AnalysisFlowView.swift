@@ -200,6 +200,10 @@ struct ResultView: View {
     @State private var waveform: [Float]?
     @State private var showOverlay = true
 
+    /// 음성·영상은 서버가 구간 근거를 **제공하는** 모달리티다. 이미지(spai)만 제공하지 않는다.
+    /// 이 구분이 없으면 "구간을 못 찾았다"를 "제공하지 않는다"로 잘못 말한다(실제로 그랬다).
+    private var modelProvidesSegments: Bool { kind == .audio || kind == .video }
+
     private var kind: UploadFile.Kind? { record.input.file?.kind }
     private var hasTimeline: Bool { record.aiEvidence.contains { $0.timeRange != nil } }
 
@@ -311,6 +315,14 @@ struct ResultView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
+        } else if modelProvidesSegments {
+            // 모델은 구간을 낼 수 있는데 이번엔 하나도 안 나온 경우 — "제공 안 함"과 다른 상태다.
+            Text("이 파일에서는 의심 구간이 검출되지 않았습니다. 위 확률만 참고해 주세요.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .cardStyle()
         } else {
             Text("이 모델(\(record.model))은 영역·구간 표시를 제공하지 않습니다. 위 확률만 참고해 주세요.")
                 .font(.caption)
@@ -329,7 +341,12 @@ struct ResultView: View {
         guard let controller = PlaybackController(data: file.data, fileExtension: ext) else { return }
         playback = controller
         if file.kind == .audio {
-            // 파형은 실제 샘플에서 계산한다 — 임시 파일을 컨트롤러가 이미 써 두었다.
+            // 선택 시점에 계산한 파형이 있으면 그대로 쓴다.
+            if let precomputed = record.input.waveform {
+                waveform = precomputed
+                return
+            }
+            // 없으면 실제 샘플에서 계산한다.
             let url = URL.temporaryDirectory.appending(path: "veritae-wave-\(record.id.uuidString).\(ext)")
             try? file.data.write(to: url)
             waveform = await WaveformLoader.load(url: url)

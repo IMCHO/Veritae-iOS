@@ -52,7 +52,9 @@ struct MockAnalysisAPI: AnalysisAPI {
         return AudioDetectionDTO(
             model: "antideepfake",
             score: score,
-            evidence: score > 0.5 ? Self.sampleEvidence : []
+            // 점수와 무관하게 구간을 준다 — 서버도 낮은 점수에서 짧은 구간을 낼 수 있고,
+            // 목에서 타임라인·파형 강조 경로가 항상 실행돼야 QA 가 볼 수 있다.
+            evidence: Self.sampleEvidence
         )
     }
 
@@ -243,7 +245,7 @@ private actor MockJobStore {
             aiDetection: VideoDetectionDTO(
                 model: "dfdc",
                 score: job.score,
-                evidence: job.score > 0.5 ? Self.videoEvidence : [],
+                evidence: Self.videoEvidence,
                 // 서버는 best-effort 로 Grad-CAM 히트맵을 합성한 PNG 를 준다. 목도 같은 모양의
                 // 이미지를 만들어 줘야 결과 화면의 오버레이 토글 경로가 목에서 실행된다.
                 evidenceImage: job.score > 0.5 ? MockHeatmap.base64PNG() : nil

@@ -318,13 +318,24 @@ struct MainView: View {
                 return
             }
 
+            // 음성은 파형을 미리 계산한다 — 미리보기가 파일명 한 줄이면 무엇을 골랐는지 안 보인다.
+            var waveform: [Float]?
+            if file.kind == .audio {
+                let tmp = URL.temporaryDirectory.appending(path: "veritae-wave-\(UUID().uuidString).\(url.pathExtension)")
+                if (try? file.data.write(to: tmp)) != nil {
+                    waveform = await WaveformLoader.load(url: tmp)
+                    try? FileManager.default.removeItem(at: tmp)
+                }
+            }
+
             withAnimation(.smooth) {
                 selectedInput = AnalysisInput(
                     kind: .file,
                     title: url.lastPathComponent,
                     subtitle: Self.subtitle(for: file.kind),
                     previewImage: file.kind == .image ? UIImage(data: file.data) : nil,
-                    file: file
+                    file: file,
+                    waveform: waveform
                 )
             }
         }
@@ -366,6 +377,21 @@ struct SourcePreview: View {
                     .scaledToFill()
                     .frame(maxHeight: maxHeight)
                     .clipShape(.rect(cornerRadius: 24))
+            } else if input.file?.kind == .audio {
+                // 음성은 파일명 대신 실제 파형. 구간 강조는 결과 화면에서만(아직 근거가 없다).
+                VStack(spacing: 10) {
+                    WaveformView(samples: input.waveform, segments: [], duration: 0)
+                        .frame(height: min(120, maxHeight - 60))
+                        .clipShape(.rect(cornerRadius: 12))
+                    Text(input.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity)
+                .cardStyle()
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: input.kind.icon)

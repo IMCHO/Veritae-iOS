@@ -6,6 +6,12 @@
 	<string>$(VERITAE_API_SCHEME)</string>
 	<key>VeritaeAPIHost</key>
 	<string>$(VERITAE_API_HOST)</string>
+	<!-- Debug 전용: 앱 Documents 를 파일 앱 '나의 iPhone > MyApp' 에 노출한다.
+	     QA 가 테스트 음성/영상을 넣고 '파일' 버튼으로 고를 수 있게 하기 위함. Release plist 엔 없다. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
