@@ -299,9 +299,9 @@ struct MainView: View {
             withAnimation(.smooth) { isPreparingInput = true }
             defer { withAnimation(.smooth) { isPreparingInput = false } }
 
-            let file: UploadFile?
+            let picked: UploadFileFactory.PickedMediaResult?
             do {
-                file = try await UploadFileFactory.fromFile(url: url)
+                picked = try await UploadFileFactory.fromFile(url: url)
             } catch let error as UploadFileError {
                 inputError = error.message
                 return
@@ -309,10 +309,11 @@ struct MainView: View {
                 inputError = Self.diagnosing("파일을 읽을 수 없습니다.", detail: "\(error)")
                 return
             }
-            guard let file else {
+            guard let picked else {
                 inputError = Self.diagnosing("이미지 · 음성 · 영상 파일만 분석할 수 있습니다.", detail: "ext=\(url.pathExtension)")
                 return
             }
+            let file = picked.file
             if let hint = UploadRule.submitBlockingHint(for: file) {
                 inputError = hint
                 return
@@ -328,12 +329,24 @@ struct MainView: View {
                 }
             }
 
+            // 파일 앱에서 골랐어도 **내용이 이미지면 사진, 영상이면 영상**으로 다룬다 — 미리보기·결과
+            // 화면이 PhotosPicker 경로와 완전히 같아진다. 분석 라우팅은 원래 `file.kind` 로 했다.
+            let sourceKind: SourceKind = switch file.kind {
+                case .image: .photo
+                case .video: .video
+                case .audio: .file
+            }
+            let preview: UIImage? = switch file.kind {
+                case .image: UIImage(data: file.data)
+                case .video: picked.thumbnailData.flatMap(UIImage.init(data:))
+                case .audio: nil
+            }
             withAnimation(.smooth) {
                 selectedInput = AnalysisInput(
-                    kind: .file,
+                    kind: sourceKind,
                     title: url.lastPathComponent,
                     subtitle: Self.subtitle(for: file.kind),
-                    previewImage: file.kind == .image ? UIImage(data: file.data) : nil,
+                    previewImage: preview,
                     file: file,
                     waveform: waveform
                 )

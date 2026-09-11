@@ -97,7 +97,7 @@ struct UploadFileFromFileTests {
     /// `#expect(throws:)` 매크로는 async throwing 클로저에서 `try` 처리를 못 해 컴파일이 깨진다.
     /// do/catch 로 직접 확인한다.
     private func expectUploadFileError(
-        _ body: () async throws -> UploadFile?,
+        _ body: () async throws -> UploadFileFactory.PickedMediaResult?,
         sourceLocation: SourceLocation = #_sourceLocation
     ) async {
         do {
@@ -127,7 +127,7 @@ struct UploadFileFromFileTests {
     ])
     func videoContentTypes(name: String, expected: String) async throws {
         let url = try makeTempFile(name: name)
-        let file = try #require(await UploadFileFactory.fromFile(url: url))
+        let file = try #require(await UploadFileFactory.fromFile(url: url)).file
         #expect(file.kind == .video)
         #expect(file.contentType == expected)
         // 방금 만든 파일을 우리 선검증이 거절하면 안 된다.
@@ -142,7 +142,7 @@ struct UploadFileFromFileTests {
     ])
     func audioContentTypes(name: String, expected: String) async throws {
         let url = try makeTempFile(name: name)
-        let file = try #require(await UploadFileFactory.fromFile(url: url))
+        let file = try #require(await UploadFileFactory.fromFile(url: url)).file
         #expect(file.kind == .audio)
         #expect(file.contentType == expected)
         #expect(UploadRule.submitBlockingHint(for: file) == nil)
@@ -156,7 +156,7 @@ struct UploadFileFromFileTests {
         try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + [UInt8](repeating: 0, count: 16))
             .write(to: url)
 
-        let file = try #require(await UploadFileFactory.fromFile(url: url))
+        let file = try #require(await UploadFileFactory.fromFile(url: url)).file
         #expect(file.kind == .image)
         #expect(file.contentType == "image/png")
     }
@@ -164,8 +164,8 @@ struct UploadFileFromFileTests {
     @Test("서버가 받지 않는 형식은 nil — 업로드 시도조차 하지 않는다")
     func unsupportedReturnsNil() async throws {
         let url = try makeTempFile(name: "문서.pdf")
-        let file = try await UploadFileFactory.fromFile(url: url)
-        #expect(file == nil)
+        let picked = try await UploadFileFactory.fromFile(url: url)
+        #expect(picked == nil)
     }
 
     /// **읽기 전에** 용량으로 거절해야 한다. 나중에 검사하면 100MB 를 메모리에 올린 뒤 버린다.

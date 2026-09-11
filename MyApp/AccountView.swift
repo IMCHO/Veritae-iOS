@@ -22,7 +22,10 @@ struct AccountView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AnalysisRecord.ID.self) { id in
                 if let record = appState.records.first(where: { $0.id == id }) {
-                    DetailView(record: record)
+                    // 분석 직후 보던 것과 **같은 화면**을 다시 연다. 별도 상세 화면은 없다.
+                    ResultView(record: record, showsCloseButton: false)
+                        .navigationTitle("판독 결과")
+                        .navigationBarTitleDisplayMode(.inline)
                 }
             }
         }

@@ -41,11 +41,6 @@ struct AnalysisFlowView: View {
                 }
             }
             .animation(.smooth(duration: 0.4), value: store.isFinished)
-            .navigationDestination(for: AnalysisRecord.ID.self) { _ in
-                if case .finished(let record) = store.phase {
-                    DetailView(record: record)
-                }
-            }
         }
         .task { await run() }
     }
@@ -194,7 +189,9 @@ struct FailureView: View {
 
 struct ResultView: View {
     let record: AnalysisRecord
-    var onClose: () -> Void
+    /// 모달(분석 직후)에서는 X 로 닫고, 마이페이지에서 push 됐을 때는 시스템 뒤로가기를 쓴다.
+    var showsCloseButton = true
+    var onClose: () -> Void = {}
 
     @State private var playback: PlaybackController?
     @State private var waveform: [Float]?
@@ -209,20 +206,22 @@ struct ResultView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            HStack {
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(width: 40, height: 40)
+            if showsCloseButton {
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityLabel("닫기")
                 }
-                .buttonStyle(.glass)
-                .accessibilityLabel("닫기")
             }
 
             ScrollView {
                 VStack(spacing: 14) {
-                    // ① 히어로 — 오버레이가 근거다. 원본 위에 히트맵, 토글·길게 눌러 비교.
+                    // 히어로 — 오버레이가 근거다. 원본 위에 히트맵, 토글·길게 눌러 비교.
                     MediaHeroView(record: record, playback: playback, waveform: waveform, showOverlay: $showOverlay)
 
                     if let playback, kind != .image {
@@ -236,7 +235,7 @@ struct ResultView: View {
                         .buttonStyle(.glass)
                     }
 
-                    // ③ 게이지 — 숫자 하나가 아니라 구간 위의 바늘.
+                    // 게이지 — 숫자 하나가 아니라 구간 위의 바늘.
                     ScoreGaugeView(score: record.aiProbability, level: record.aiLevel, model: record.model)
 
                     // 사기 위험도는 서버에 판정 근거가 있을 때만. 있으면 **나란히** 둔다 — 평균 내지 않는다.
@@ -250,8 +249,10 @@ struct ResultView: View {
                         )
                     }
 
-                    // ④ 시간 구간은 텍스트 카드가 아니라 타임라인 마커.
-                    if hasTimeline {
+                    // 시간 구간은 텍스트 카드가 아니라 타임라인 마커.
+                    // 음성은 파형 자체가 타임라인이라 카드를 따로 두지 않는다. 영상은 히어로가
+                    // 플레이어라 구간 마커를 아래에 둔다.
+                    if hasTimeline, kind == .video {
                         EvidenceTimelineView(
                             segments: record.aiEvidence.filter { $0.timeRange != nil },
                             duration: playback?.duration ?? 0,
@@ -261,10 +262,10 @@ struct ResultView: View {
                         }
                     }
 
-                    // ⑤ 범례 — "증거"가 아니라 "주목한 곳". 서버가 준 것만 설명한다.
+                    // 범례 — "증거"가 아니라 "주목한 곳". 서버가 준 것만 설명한다.
                     legend
 
-                    // ⑥ 참고용 고지는 항상 보이게.
+                    // 참고용 고지는 항상 보이게.
                     Label("AI 판독 결과는 참고용이며 확정적 증거가 아닙니다.", systemImage: "info.circle")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -274,15 +275,8 @@ struct ResultView: View {
                 .padding(.bottom, 12)
             }
             .scrollIndicators(.hidden)
-
-            // ⑦ "상세 분석" → "판독 정보": 실제로 있는 정보만.
-            NavigationLink(value: record.id) {
-                Label("판독 정보", systemImage: "doc.text.magnifyingglass")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 36)
-            }
-            .buttonStyle(.glassProminent)
+            // 별도 "판독 정보" 화면은 두지 않는다 — 이 화면이 서버가 준 모든 것(점수·구간·히트맵)을
+            // 이미 보여주고, 나머지(모델·파일명)는 게이지와 히어로에 있다.
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 8)

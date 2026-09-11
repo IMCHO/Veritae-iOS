@@ -90,12 +90,12 @@ enum UploadFileFactory {
 
     // MARK: - 영상
 
-    /// 영상 업로드 대상 + 미리보기 썸네일.
+    /// 업로드 대상 + 미리보기 썸네일(영상만 채워진다).
     ///
     /// 썸네일을 여기서 만드는 이유: 원본 파일 URL 이 있어야 프레임을 뽑을 수 있는데, 그 임시
     /// 파일은 이 함수가 끝나면서 지워진다. 밖으로 URL 을 내보내면 수명 관리가 호출부로 새어
     /// 나가므로, 필요한 것(바이트 + 썸네일)만 만들어 돌려준다.
-    nonisolated struct PickedVideoResult: Sendable {
+    nonisolated struct PickedMediaResult: Sendable {
         let file: UploadFile
         /// JPEG 바이트. 실패하면 `nil` — 썸네일이 없다고 분석을 막지는 않는다.
         let thumbnailData: Data?
@@ -105,7 +105,7 @@ enum UploadFileFactory {
     ///
     /// **용량을 먼저 파일 속성으로 확인하고, 상한을 넘으면 읽지 않고 거절한다.** 100MB 초과
     /// 영상을 일단 메모리로 읽어 들이면 그 자체로 압박이 크다.
-    nonisolated static func video(from item: PhotosPickerItem) async throws -> PickedVideoResult? {
+    nonisolated static func video(from item: PhotosPickerItem) async throws -> PickedMediaResult? {
         guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
             return nil
         }
@@ -133,7 +133,7 @@ enum UploadFileFactory {
             contentType: videoTypes[ext] ?? "video/quicktime",
             data: data
         )
-        return PickedVideoResult(file: file, thumbnailData: await thumbnail(for: movie.url))
+        return PickedMediaResult(file: file, thumbnailData: await thumbnail(for: movie.url))
     }
 
     /// 영상 첫 부분에서 한 프레임을 뽑아 JPEG 로 만든다.
@@ -164,7 +164,7 @@ enum UploadFileFactory {
     /// **security-scoped 접근을 반드시 열어야 한다.** 이 앱은 `ENABLE_APP_SANDBOX = YES` +
     /// `ENABLE_USER_SELECTED_FILES = readonly` 라서, `fileImporter` 가 준 URL 을 그냥
     /// `Data(contentsOf:)` 하면 권한 오류로 실패한다.
-    nonisolated static func fromFile(url: URL) async throws -> UploadFile? {
+    nonisolated static func fromFile(url: URL) async throws -> PickedMediaResult? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
@@ -187,16 +187,24 @@ enum UploadFileFactory {
         }
 
         if let contentType = audioTypes[ext] {
-            return UploadFile(kind: .audio, filename: url.lastPathComponent, contentType: contentType, data: data)
+            return PickedMediaResult(
+                file: UploadFile(kind: .audio, filename: url.lastPathComponent, contentType: contentType, data: data),
+                thumbnailData: nil
+            )
         }
         if let contentType = videoTypes[ext] {
-            return UploadFile(kind: .video, filename: url.lastPathComponent, contentType: contentType, data: data)
+            // 파일 앱에서 고른 영상도 PhotosPicker 영상과 **같은 경로**를 탄다 — 썸네일까지.
+            return PickedMediaResult(
+                file: UploadFile(kind: .video, filename: url.lastPathComponent, contentType: contentType, data: data),
+                thumbnailData: await thumbnail(for: url)
+            )
         }
         // 이미지 여부는 바이트로 판정한다 — 확장자가 없거나 틀린 파일도 파일 앱에서 고를 수 있다.
         guard ImageByteFormat(data: data) != nil || UIImage(data: data) != nil else {
             return nil
         }
-        return await image(from: data, filename: url.lastPathComponent)
+        guard let file = await image(from: data, filename: url.lastPathComponent) else { return nil }
+        return PickedMediaResult(file: file, thumbnailData: nil)
     }
 
     /// 파일 선택 다이얼로그에 노출할 형식. `.item`(전부)으로 두면 서버가 못 받는 파일을

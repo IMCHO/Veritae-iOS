@@ -222,6 +222,8 @@ struct MediaHeroView: View {
     let waveform: [Float]?
     @Binding var showOverlay: Bool
     @State private var isPressing = false
+    /// 음성: 파형에서 누른 의심 구간. 캡션에 서버 `Evidence.title` 을 그대로 보여준다.
+    @State private var selectedSegment: EvidenceItem?
 
     private var heatmap: UIImage? {
         record.evidenceImage.flatMap(UIImage.init(data:))
@@ -235,7 +237,8 @@ struct MediaHeroView: View {
                     .frame(height: 220)
                     .clipShape(.rect(cornerRadius: 20))
 
-                if let playback, record.input.file?.kind != .image {
+                // 영상만 배지. 음성은 캡션 줄 오른쪽에 시각을 넣는다 — 배지가 캡션과 겹쳤다(실측).
+                if let playback, record.input.file?.kind == .video {
                     Text(timestamp(playback.currentTime))
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -263,7 +266,38 @@ struct MediaHeroView: View {
         let overlayVisible = showOverlay && !isPressing
         switch record.input.file?.kind {
         case .audio:
-            WaveformView(samples: waveform, segments: record.aiEvidence, duration: playback?.duration ?? 0)
+            VStack(spacing: 0) {
+                WaveformView(
+                    samples: waveform,
+                    segments: record.aiEvidence,
+                    duration: playback?.duration ?? 0,
+                    currentTime: playback?.currentTime ?? 0
+                ) { t in
+                    playback?.seek(to: t)
+                    selectedSegment = record.aiEvidence.first { $0.timeRange?.contains(t) == true }
+                }
+                // 선택 구간 캡션 — 별도 타임라인 카드 대신 파형 바로 아래.
+                HStack(spacing: 6) {
+                    if let seg = selectedSegment, let r = seg.timeRange {
+                        Text(String(format: "%.1f~%.1f초", r.lowerBound, r.upperBound))
+                            .foregroundStyle(RiskLevel.high.color).fontWeight(.semibold).monospacedDigit()
+                        Text("· \(seg.title)").lineLimit(1)
+                    } else {
+                        let n = record.aiEvidence.filter { $0.timeRange != nil }.count
+                        Text(n > 0 ? "의심 구간 \(n)곳 — 붉은 부분을 누르면 이동" : "의심 구간이 검출되지 않았습니다")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    if let playback {
+                        Text(timestamp(playback.currentTime))
+                            .foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+                .font(.caption)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(Color(uiColor: .secondarySystemGroupedBackground))
+            }
         case .video:
             ZStack {
                 if let playback {
@@ -309,18 +343,21 @@ struct MediaHeroView: View {
     }
 }
 
-/// 실제 RMS 파형 + 의심 구간 강조. 파형이 아직 없으면 평평한 트랙만 보여준다.
+/// 실제 RMS 파형 + 의심 구간 강조. **파형 자체가 타임라인이다** — 어디든 누르면 그 시점으로
+/// 시크하고, 붉은 구간을 누르면 그 근거가 선택된다. 음성에는 별도 타임라인 카드를 두지 않는다.
 struct WaveformView: View {
     let samples: [Float]?
     let segments: [EvidenceItem]
     let duration: Double
+    var currentTime: Double = 0
+    var onSeek: ((Double) -> Void)? = nil
 
     var body: some View {
         GeometryReader { geo in
             let bars = samples ?? []
             let width = geo.size.width
             let barWidth = bars.isEmpty ? 0 : width / CGFloat(bars.count)
-            ZStack {
+            ZStack(alignment: .leading) {
                 Color(uiColor: .secondarySystemGroupedBackground)
                 HStack(alignment: .center, spacing: barWidth * 0.3) {
                     ForEach(Array(bars.enumerated()), id: \.offset) { i, v in
@@ -332,9 +369,23 @@ struct WaveformView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if bars.isEmpty {
-                    ProgressView().controlSize(.small)
+
+                // 재생 헤드 — 시크·재생 위치가 파형 위에 바로 보여야 "여기"를 가리킬 수 있다.
+                if duration > 0, onSeek != nil {
+                    Rectangle()
+                        .fill(Color.primary)
+                        .frame(width: 2)
+                        .offset(x: CGFloat(min(max(currentTime, 0), duration) / duration) * width)
+                        .animation(.linear(duration: 0.1), value: currentTime)
                 }
+                if bars.isEmpty {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                guard let onSeek, duration > 0 else { return }
+                onSeek(Double(location.x / width) * duration)
             }
         }
     }
