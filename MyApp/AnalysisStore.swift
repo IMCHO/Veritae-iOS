@@ -264,7 +264,8 @@ extension EvidenceItem {
             icon: Self.icon(for: dto.tags),
             title: dto.title,
             detail: Self.detailWithTimeRange(dto),
-            severity: nil
+            severity: nil,
+            timeRange: dto.endSec > dto.startSec ? dto.startSec...dto.endSec : nil
         )
     }
 

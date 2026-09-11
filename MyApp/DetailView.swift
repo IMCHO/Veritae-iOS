@@ -52,7 +52,7 @@ struct DetailView: View {
             .padding(.vertical, 12)
         }
         .background(AppBackground())
-        .navigationTitle("상세 분석")
+        .navigationTitle("판독 정보")
         .navigationBarTitleDisplayMode(.inline)
     }
 

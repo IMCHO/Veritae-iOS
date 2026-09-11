@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 #if DEBUG
 
@@ -243,7 +244,9 @@ private actor MockJobStore {
                 model: "dfdc",
                 score: job.score,
                 evidence: job.score > 0.5 ? Self.videoEvidence : [],
-                evidenceImage: nil
+                // 서버는 best-effort 로 Grad-CAM 히트맵을 합성한 PNG 를 준다. 목도 같은 모양의
+                // 이미지를 만들어 줘야 결과 화면의 오버레이 토글 경로가 목에서 실행된다.
+                evidenceImage: job.score > 0.5 ? MockHeatmap.base64PNG() : nil
             ),
             errorMessage: nil
         )
@@ -261,6 +264,40 @@ private actor MockJobStore {
             endSec: 2.5
         ),
     ]
+}
+
+/// 목 전용 합성 히트맵. 서버 `evidenceImage`(Grad-CAM 을 프레임 위에 합성한 PNG)와 같은 형태를
+/// 흉내 낸다 — 어두운 프레임 위에 붉은 블롭 하나. 실제 판독 결과가 아니다.
+private nonisolated enum MockHeatmap {
+    static func base64PNG() -> String? {
+        let size = CGSize(width: 640, height: 480)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { ctx in
+            let cg = ctx.cgContext
+            cg.setFillColor(UIColor(white: 0.16, alpha: 1).cgColor)
+            cg.fill(CGRect(origin: .zero, size: size))
+
+            // 얼굴 자리 — 밝은 타원
+            cg.setFillColor(UIColor(red: 0.85, green: 0.76, blue: 0.69, alpha: 1).cgColor)
+            cg.fillEllipse(in: CGRect(x: 240, y: 110, width: 160, height: 200))
+
+            // 히트맵 블롭 — 붉은 중심에서 투명으로
+            let colors = [
+                UIColor(red: 1, green: 0.23, blue: 0.19, alpha: 0.85).cgColor,
+                UIColor(red: 1, green: 0.62, blue: 0.04, alpha: 0.55).cgColor,
+                UIColor.clear.cgColor,
+            ] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.45, 1]) {
+                cg.drawRadialGradient(
+                    gradient,
+                    startCenter: CGPoint(x: 335, y: 190), startRadius: 0,
+                    endCenter: CGPoint(x: 335, y: 190), endRadius: 95,
+                    options: []
+                )
+            }
+        }
+        return image.pngData()?.base64EncodedString()
+    }
 }
 
 #endif

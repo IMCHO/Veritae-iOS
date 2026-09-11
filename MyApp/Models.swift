@@ -84,6 +84,9 @@ struct EvidenceItem: Identifiable {
     /// 심각도를 계산해 붙이면 서버가 말하지 않은 것을 지어내는 것이 된다. `nil`이면 UI가
     /// 뱃지를 감춘다.
     var severity: RiskLevel?
+    /// 서버 `startSec`~`endSec`. 음성·영상의 근거는 **시간 구간**이라 텍스트 카드가 아니라
+    /// 타임라인 마커로 그린다 — 눌러서 그 지점으로 이동할 수 있어야 근거로서 의미가 있다.
+    var timeRange: ClosedRange<Double>? = nil
 }
 
 /// 하나의 분석 기록

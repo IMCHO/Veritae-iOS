@@ -196,14 +196,18 @@ struct ResultView: View {
     let record: AnalysisRecord
     var onClose: () -> Void
 
+    @State private var playback: PlaybackController?
+    @State private var waveform: [Float]?
+    @State private var showOverlay = true
+
+    private var kind: UploadFile.Kind? { record.input.file?.kind }
+    private var hasTimeline: Bool { record.aiEvidence.contains { $0.timeRange != nil } }
+
     var body: some View {
-        VStack(spacing: 20) {
-            // 닫기
+        VStack(spacing: 16) {
             HStack {
                 Spacer()
-                Button {
-                    onClose()
-                } label: {
+                Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 40, height: 40)
@@ -213,53 +217,63 @@ struct ResultView: View {
             }
 
             ScrollView {
-                VStack(spacing: 20) {
-                    SourcePreview(input: record.input, maxHeight: 240)
+                VStack(spacing: 14) {
+                    // ① 히어로 — 오버레이가 근거다. 원본 위에 히트맵, 토글·길게 눌러 비교.
+                    MediaHeroView(record: record, playback: playback, waveform: waveform, showOverlay: $showOverlay)
 
-                    // 판정 카드
-                    VStack(spacing: 12) {
-                        VerdictCard(
-                            title: "AI 생성 가능성",
-                            value: record.aiProbability.formatted(.percent.precision(.fractionLength(0))),
-                            caption: record.aiLevel.label,
-                            color: record.aiLevel.color,
-                            icon: "cpu"
-                        )
-
-                        // 사기 위험도는 서버에 판정 근거가 있을 때만 보여준다. 없으면 카드를
-                        // 감춘다 — 근거 없는 위험도를 노출하는 것이 사기예방 앱에서 가장 나쁘다.
-                        if let riskLevel = record.riskLevel {
-                            VerdictCard(
-                                title: "사기 위험도",
-                                value: riskLevel.label,
-                                caption: riskCaption(riskLevel),
-                                color: riskLevel.color,
-                                icon: "exclamationmark.shield"
-                            )
-                        }
-                    }
-
-                    // 영상 히트맵 — best-effort라 없을 수 있다.
-                    if let data = record.evidenceImage, let image = UIImage(data: data) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("판독 근거 히트맵")
+                    if let playback, kind != .image {
+                        Button {
+                            playback.togglePlay()
+                        } label: {
+                            Label(playback.isPlaying ? "일시정지" : "재생", systemImage: playback.isPlaying ? "pause.fill" : "play.fill")
                                 .font(.subheadline.weight(.semibold))
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .clipShape(.rect(cornerRadius: 12))
+                                .frame(width: 120, height: 34)
                         }
-                        .padding(20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .cardStyle()
+                        .buttonStyle(.glass)
                     }
+
+                    // ③ 게이지 — 숫자 하나가 아니라 구간 위의 바늘.
+                    ScoreGaugeView(score: record.aiProbability, level: record.aiLevel, model: record.model)
+
+                    // 사기 위험도는 서버에 판정 근거가 있을 때만. 있으면 **나란히** 둔다 — 평균 내지 않는다.
+                    if let riskLevel = record.riskLevel {
+                        VerdictCard(
+                            title: "사기 위험도",
+                            value: riskLevel.label,
+                            caption: riskCaption(riskLevel),
+                            color: riskLevel.color,
+                            icon: "exclamationmark.shield"
+                        )
+                    }
+
+                    // ④ 시간 구간은 텍스트 카드가 아니라 타임라인 마커.
+                    if hasTimeline {
+                        EvidenceTimelineView(
+                            segments: record.aiEvidence.filter { $0.timeRange != nil },
+                            duration: playback?.duration ?? 0,
+                            currentTime: playback?.currentTime ?? 0
+                        ) { t in
+                            playback?.seek(to: t)
+                        }
+                    }
+
+                    // ⑤ 범례 — "증거"가 아니라 "주목한 곳". 서버가 준 것만 설명한다.
+                    legend
+
+                    // ⑥ 참고용 고지는 항상 보이게.
+                    Label("AI 판독 결과는 참고용이며 확정적 증거가 아닙니다.", systemImage: "info.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
                 }
                 .padding(.bottom, 12)
             }
             .scrollIndicators(.hidden)
 
+            // ⑦ "상세 분석" → "판독 정보": 실제로 있는 정보만.
             NavigationLink(value: record.id) {
-                Label("상세 분석 보기", systemImage: "doc.text.magnifyingglass")
+                Label("판독 정보", systemImage: "doc.text.magnifyingglass")
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
@@ -268,6 +282,59 @@ struct ResultView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 8)
+        .task { await setUpPlayback() }
+        .onDisappear { playback?.tearDown() }
+    }
+
+    @ViewBuilder
+    private var legend: some View {
+        let text: String? = {
+            let hasHeatmap = record.evidenceImage != nil
+            switch kind {
+            case .video where hasHeatmap:
+                return "붉게 표시된 영역은 모델이 판정에 가장 크게 반영한 부분입니다. 붉은 구간은 모델 출력에서 나온 값입니다."
+            case .video where hasTimeline, .audio where hasTimeline:
+                return "붉은 구간은 모델이 합성 가능성을 높게 본 부분입니다. 구간은 모델 출력에서 나온 값입니다."
+            case .image where hasHeatmap:
+                return "붉게 표시된 영역은 모델이 판정에 가장 크게 반영한 부분입니다."
+            default:
+                return nil
+            }
+        }()
+        if let text {
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(LinearGradient(colors: [RiskLevel.high.color, RiskLevel.medium.color], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 10, height: 10)
+                    .padding(.top, 4)
+                Text(text).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+        } else {
+            Text("이 모델(\(record.model))은 영역·구간 표시를 제공하지 않습니다. 위 확률만 참고해 주세요.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .cardStyle()
+        }
+    }
+
+    private func setUpPlayback() async {
+        guard let file = record.input.file, file.kind != .image, playback == nil else { return }
+        let ext = (file.filename as NSString).pathExtension.isEmpty
+            ? (file.kind == .audio ? "m4a" : "mov")
+            : (file.filename as NSString).pathExtension
+        guard let controller = PlaybackController(data: file.data, fileExtension: ext) else { return }
+        playback = controller
+        if file.kind == .audio {
+            // 파형은 실제 샘플에서 계산한다 — 임시 파일을 컨트롤러가 이미 써 두었다.
+            let url = URL.temporaryDirectory.appending(path: "veritae-wave-\(record.id.uuidString).\(ext)")
+            try? file.data.write(to: url)
+            waveform = await WaveformLoader.load(url: url)
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private func riskCaption(_ level: RiskLevel) -> String {
