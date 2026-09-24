@@ -725,6 +725,26 @@ struct AnalysisHistoryStoreTests {
         #expect(!store.isLoading)
     }
 
+    /// LL-003: 내부 fetch Task 가 **시작되기 전에** clear() 되면, 뒤늦게 시작한 Task 가 로딩 플래그를
+    /// 다시 켜서 스피너가 남으면 안 된다. `Task.yield()` 로 순서를 고정한다 — MainActor 는 FIFO 라
+    /// load() 가 내부 Task 를 만든 직후, 그 Task 보다 먼저 테스트가 재개돼 clear() 를 부른다.
+    /// (시간 대기 없이 결정적으로 재현된다. 예전 코드에서는 isLoading 이 true 로 남는다.)
+    @Test("내부 Task 가 시작되기 전에 clear() 돼도 로딩 표시가 남지 않는다")
+    func clearBeforeFetchStartsLeavesNoSpinner() async {
+        let log = CallLog()
+        let api = StubAnalysisAPI(log: log, recordsResponse: [item("a", modality: "IMAGE")], recordsDelay: .milliseconds(50))
+        let (store, _) = makeStore(api: api, log: log)
+
+        let task = Task { await store.load() }
+        await Task.yield()
+        store.clear()
+        await task.value
+
+        #expect(!store.isLoading)
+        #expect(store.records == nil)
+        #expect(store.loadError == nil)
+    }
+
     /// LL-001: 화면 이탈(호출자 취소)은 "네트워크 오류"가 아니다. 요청은 호출자와 수명이 분리돼 끝까지 가고,
     /// 그 결과가 다음 진입에 쓰인다.
     @Test("호출자가 취소돼도 오류를 띄우지 않고 요청은 끝까지 가서 목록을 채운다")

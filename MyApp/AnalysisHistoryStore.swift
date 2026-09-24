@@ -46,14 +46,20 @@ final class AnalysisHistoryStore {
             return
         }
         let started = generation
+        // 로딩 상태는 **여기서 동기적으로** 켠다. 예전에는 `fetch` 첫 줄에서 켰는데, 내부 Task 가
+        // 실제로 시작되기 전에 `clear()` 가 끼어들면 clear 가 끈 플래그를 뒤늦게 시작한 Task 가 다시
+        // 켜고, 세대가 바뀌었으니 `defer` 는 정리를 건너뛰어 **로딩 표시가 켜진 채 남았다**(LL-003 변형,
+        // 테스트 실측). 여기서 켜면 clear 이후에 이 플래그를 쓰는 코드가 남지 않는다.
+        isLoading = true
+        loadError = nil
         let task = Task { await self.fetch(generation: started) }
         inFlight = (started, task)
         await task.value
     }
 
     private func fetch(generation started: Int) async {
-        isLoading = true
-        loadError = nil
+        // 시작도 하기 전에 `clear()` 됐다 — 요청을 보낼 이유가 없다.
+        guard generation == started else { return }
         // LL-001: 정리는 모든 경로에서 돌아야 한다. 단, 그사이 `clear()` 가 돌았으면 로딩 플래그와
         // 진행 슬롯은 이미 새 세대의 것이라 건드리지 않는다(LL-003 — 슬롯은 내 세대일 때만 비운다).
         defer {
