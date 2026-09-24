@@ -53,10 +53,14 @@ struct MockAnalysisAPI: AnalysisAPI {
         let score = Self.pseudoScore(for: file)
         // SPAI 는 근거 카드를 만들지 않는다 — evidence 필드 자체가 없다. 히트맵은 best-effort 라
         // 점수가 낮으면 빼서 "히트맵 없음" 경로도 목에서 돌게 한다.
+        //
+        // 이미지 히트맵은 **올린 사진 위에** 합성한다. 서버도 원본 위에 Grad-CAM 을 얹은 완성
+        // 이미지를 준다. 영상용 가짜 프레임을 그대로 쓰면 불투명한 가짜 화면이 사용자 사진을
+        // 통째로 덮어 "원본이 안 보인다" 로 보였다(실측).
         let detection = ImageDetectionDTO(
             model: "spai",
             score: score,
-            evidenceImage: score > 0.5 ? MockHeatmap.base64PNG() : nil
+            evidenceImage: score > 0.5 ? MockHeatmap.base64PNG(over: file.data) : nil
         )
         let scam = scamDetection(for: file)
         await history.add(modality: .image, image: detection, scam: scam)
@@ -486,6 +490,33 @@ private nonisolated enum MockHeatmap {
                     options: []
                 )
             }
+        }
+        return image.pngData()?.base64EncodedString()
+    }
+
+    /// 실제 사진 위에 붉은 블롭을 합성한다 — 서버 이미지 히트맵과 같은 "원본 + 표시" 형태.
+    /// 사진을 읽지 못하면 가짜 프레임으로 폴백한다.
+    static func base64PNG(over imageData: Data) -> String? {
+        guard let photo = UIImage(data: imageData) else { return base64PNG() }
+        // 서버 히트맵처럼 원본보다 작은 해상도로 — 수 MB 원본을 그대로 PNG 로 만들면 목 응답이
+        // 불필요하게 무거워진다.
+        let scale = min(1, 800 / max(photo.size.width, photo.size.height))
+        let size = CGSize(width: photo.size.width * scale, height: photo.size.height * scale)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            photo.draw(in: CGRect(origin: .zero, size: size))
+            let colors = [
+                UIColor(red: 1, green: 0.23, blue: 0.19, alpha: 0.7).cgColor,
+                UIColor(red: 1, green: 0.62, blue: 0.04, alpha: 0.4).cgColor,
+                UIColor.clear.cgColor,
+            ] as CFArray
+            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.45, 1]) else { return }
+            let center = CGPoint(x: size.width * 0.55, y: size.height * 0.4)
+            ctx.cgContext.drawRadialGradient(
+                gradient,
+                startCenter: center, startRadius: 0,
+                endCenter: center, endRadius: min(size.width, size.height) * 0.3,
+                options: []
+            )
         }
         return image.pngData()?.base64EncodedString()
     }

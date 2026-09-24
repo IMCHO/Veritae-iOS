@@ -385,10 +385,18 @@ struct SourcePreview: View {
     var body: some View {
         VStack(spacing: 0) {
             if let image = input.previewImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxHeight: maxHeight)
+                // 크기는 `Color.clear` 가 정하고 이미지는 overlay 로 얹는다. 이미지에 직접
+                // `.scaledToFill().frame(maxHeight:)` 를 걸면 **폭이 제한되지 않는다** — 가로로 긴
+                // 영상 썸네일(16:9)은 높이 240 에 맞추면 폭이 화면보다 넓어지고, `clipShape` 는
+                // 그리는 영역만 자를 뿐 레이아웃 크기는 부모에 그대로 전달돼 화면 전체가 옆으로
+                // 밀려났다(실측). overlay 는 부모 크기에 영향을 주지 않는다.
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: maxHeight)
+                    .overlay {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
                     .clipShape(.rect(cornerRadius: 24))
             } else if input.file?.kind == .audio {
                 // 음성은 파일명 대신 실제 파형. 구간 강조는 결과 화면에서만(아직 근거가 없다).

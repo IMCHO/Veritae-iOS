@@ -225,7 +225,8 @@ struct MediaHeroView: View {
     let playback: PlaybackController?
     let waveform: [Float]?
     @Binding var showOverlay: Bool
-    @State private var isPressing = false
+    /// 길게 눌러 원본을 보는 중인가. `@GestureState` 라 손을 떼면 자동으로 `false` 가 된다.
+    @GestureState private var isRevealingOriginal = false
     /// 음성: 파형에서 누른 의심 구간. 캡션에 서버 `Evidence.title` 을 그대로 보여준다.
     @State private var selectedSegment: EvidenceItem?
 
@@ -238,9 +239,12 @@ struct MediaHeroView: View {
     var body: some View {
         VStack(spacing: 10) {
             ZStack(alignment: .bottomLeading) {
-                content
+                // 크기는 `Color.clear` 가 정하고 내용은 overlay 로 얹는다 — `scaledToFill` 이미지가
+                // 레이아웃 폭을 부모로 밀어내지 않게 한다(`SourcePreview` 와 같은 이유).
+                Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: 220)
+                    .overlay { content }
                     .clipShape(.rect(cornerRadius: 20))
 
                 // 영상만 배지. 음성은 캡션 줄 오른쪽에 시각을 넣는다 — 배지가 캡션과 겹쳤다(실측).
@@ -253,7 +257,17 @@ struct MediaHeroView: View {
                         .padding(10)
                 }
             }
-            .onLongPressGesture(minimumDuration: 0.15, pressing: { isPressing = $0 }, perform: {})
+            // 원본은 **길게 누름이 성립한 뒤에만** 보여준다. 이전 구현은 `onLongPressGesture(pressing:)`
+            // 이었는데, 그 콜백은 최소 시간을 기다리지 않고 **손가락이 닿는 순간** true 가 돼서
+            // 이 영역에서 스크롤을 시작할 때마다 판독 표시가 걷히고 원본이 번쩍 보였다(실측).
+            // 손가락이 움직이면 LongPress 가 실패하므로 스크롤은 그대로 ScrollView 가 가져간다.
+            .gesture(
+                LongPressGesture(minimumDuration: 0.3)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .updating($isRevealingOriginal) { value, state, _ in
+                        if case .second(true, _) = value { state = true }
+                    }
+            )
             .accessibilityLabel(accessibilityDescription)
 
             if heatmap != nil, hasOriginal {
@@ -269,7 +283,7 @@ struct MediaHeroView: View {
 
     @ViewBuilder
     private var content: some View {
-        let overlayVisible = !hasOriginal || (showOverlay && !isPressing)
+        let overlayVisible = !hasOriginal || (showOverlay && !isRevealingOriginal)
         switch record.modality {
         case .audio:
             VStack(spacing: 0) {
