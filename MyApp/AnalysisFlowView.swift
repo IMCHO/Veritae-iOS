@@ -189,8 +189,7 @@ struct FailureView: View {
 
 struct ResultView: View {
     let record: AnalysisRecord
-    /// 모달(분석 직후)에서는 X 로 닫고, 마이페이지에서 push 됐을 때는 시스템 뒤로가기를 쓴다.
-    var showsCloseButton = true
+    /// 우상단 X. 분석 직후(모달)에서는 닫기, 기록 상세(push)에서는 뒤로 — 두 화면이 같은 모양이어야 한다.
     var onClose: () -> Void = {}
 
     @State private var playback: PlaybackController?
@@ -210,17 +209,15 @@ struct ResultView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            if showsCloseButton {
-                HStack {
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(width: 40, height: 40)
-                    }
-                    .buttonStyle(.glass)
-                    .accessibilityLabel("닫기")
+            HStack {
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(width: 40, height: 40)
                 }
+                .buttonStyle(.glass)
+                .accessibilityLabel("닫기")
             }
 
             ScrollView {

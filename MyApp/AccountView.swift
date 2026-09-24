@@ -25,11 +25,7 @@ struct AccountView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AnalysisRecord.ID.self) { id in
                 if let record = history.records?.first(where: { $0.id == id }) {
-                    // 분석 직후 보던 것과 **같은 화면**을 다시 연다. 별도 상세 화면은 없다.
-                    // 서버 기록은 원본 미디어가 없어(`input == nil`) 판독 결과만으로 그려진다.
-                    ResultView(record: record, showsCloseButton: false)
-                        .navigationTitle("판독 결과")
-                        .navigationBarTitleDisplayMode(.inline)
+                    RecordDetailView(record: record)
                 }
             }
         }
@@ -151,6 +147,29 @@ struct AccountView: View {
 }
 
 // MARK: - 기록 행
+
+/// 기록 상세. 분석 직후 화면(`AnalysisFlowView` 의 결과 단계)과 **똑같이 그린다** — 같은 배경,
+/// 같은 `ResultView`, 같은 우상단 X 버튼. 사용자는 두 화면이 완전히 같기를 원한다.
+///
+/// 이전에는 배경 없이 `ResultView` 만 push 해서 시트의 흰 배경 위에 흰 카드가 묻혔고, 상단도
+/// "판독 결과" 제목 + 시스템 뒤로 버튼이라 달랐다. 내비게이션 바는 숨기지 않고 비워 둔다 —
+/// 분석 직후 화면도 `NavigationStack` 안의 빈 바를 가지므로, 숨기면 내용이 위로 올라가 어긋난다.
+///
+/// 남은 차이는 원본 미디어(원본 토글·파형·재생)뿐이다. 서버가 업로드 원본을 보관하지 않아
+/// 기록에는 원본이 없다 — 서버에 보관을 요청해 둔 상태다(`api/server-request-2026-09-24-original-media.md`).
+private struct RecordDetailView: View {
+    let record: AnalysisRecord
+    /// push 된 화면 안에서 읽어야 "뒤로(pop)" 가 된다. 바깥(AccountView)의 dismiss 는 시트를 닫는다.
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            AppBackground()
+            ResultView(record: record) { dismiss() }
+        }
+        .navigationBarBackButtonHidden(true)
+    }
+}
 
 struct HistoryRow: View {
     let record: AnalysisRecord
