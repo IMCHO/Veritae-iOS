@@ -130,7 +130,7 @@ struct AnalysisErrorTests {
     func everyCaseHasMessage() {
         let cases: [AnalysisError] = [
             .invalidFile("a"), .detectionServiceUnavailable, .jobNotFound, .sessionExpired,
-            .unsupportedInput("b"), .network, .server, .jobFailed("c"), .unknown("d"),
+            .unsupportedInput("b"), .network, .server, .jobFailed("c", retryable: false), .unknown("d"),
         ]
         for error in cases {
             #expect(error.errorDescription?.isEmpty == false, "문구 누락: \(error)")

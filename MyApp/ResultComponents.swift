@@ -11,8 +11,9 @@ struct ScoreGaugeView: View {
     let level: RiskLevel
     let model: String
 
-    private static let lowCut = 0.35
-    private static let midCut = 0.7
+    /// 띠 경계는 `RiskLevel(score:)` 와 같은 값이어야 한다 — 다르면 바늘은 "보통" 띠에 있는데 글자는 "높음"이 된다.
+    private static let lowCut = RiskLevel.lowUpperBound
+    private static let midCut = RiskLevel.mediumUpperBound
 
     var body: some View {
         HStack(spacing: 14) {
@@ -216,6 +217,9 @@ nonisolated enum WaveformLoader {
 
 /// 결과 화면의 주인공. 원본 위에 서버 히트맵을 얹고, 토글과 길게-누르기로 즉시 비교한다.
 /// 얼굴 위의 붉은 블롭은 **참조 없이는 읽히지 않는다** — 원본과 나란히 봐야 의미가 생긴다.
+///
+/// 원본이 없는 서버 기록(`record.input == nil`)은 히트맵만 보여주고 토글을 숨긴다 — "원본"으로
+/// 바꾸면 빈 상자가 나오기 때문이다. 원본도 히트맵도 없으면 `ResultView` 가 이 뷰를 아예 넣지 않는다.
 struct MediaHeroView: View {
     let record: AnalysisRecord
     let playback: PlaybackController?
@@ -229,6 +233,8 @@ struct MediaHeroView: View {
         record.evidenceImage.flatMap(UIImage.init(data:))
     }
 
+    private var hasOriginal: Bool { record.input != nil }
+
     var body: some View {
         VStack(spacing: 10) {
             ZStack(alignment: .bottomLeading) {
@@ -238,7 +244,7 @@ struct MediaHeroView: View {
                     .clipShape(.rect(cornerRadius: 20))
 
                 // 영상만 배지. 음성은 캡션 줄 오른쪽에 시각을 넣는다 — 배지가 캡션과 겹쳤다(실측).
-                if let playback, record.input.file?.kind == .video {
+                if let playback, record.modality == .video {
                     Text(timestamp(playback.currentTime))
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -250,7 +256,7 @@ struct MediaHeroView: View {
             .onLongPressGesture(minimumDuration: 0.15, pressing: { isPressing = $0 }, perform: {})
             .accessibilityLabel(accessibilityDescription)
 
-            if heatmap != nil {
+            if heatmap != nil, hasOriginal {
                 Picker("표시", selection: $showOverlay) {
                     Text("판독 표시").tag(true)
                     Text("원본").tag(false)
@@ -263,8 +269,8 @@ struct MediaHeroView: View {
 
     @ViewBuilder
     private var content: some View {
-        let overlayVisible = showOverlay && !isPressing
-        switch record.input.file?.kind {
+        let overlayVisible = !hasOriginal || (showOverlay && !isPressing)
+        switch record.modality {
         case .audio:
             VStack(spacing: 0) {
                 WaveformView(
@@ -313,9 +319,9 @@ struct MediaHeroView: View {
                         .transition(.opacity)
                 }
             }
-        default:
+        case .image:
             ZStack {
-                if let image = record.input.previewImage {
+                if let image = record.input?.previewImage {
                     Image(uiImage: image).resizable().scaledToFill()
                 } else {
                     Color.secondary.opacity(0.15)
@@ -330,12 +336,18 @@ struct MediaHeroView: View {
 
     private var accessibilityDescription: String {
         let base: String
-        switch record.input.file?.kind {
+        switch record.modality {
         case .audio: base = "음성 파형"
         case .video: base = "영상 프레임"
-        default: base = "분석한 이미지"
+        case .image: base = "분석한 이미지"
         }
-        return heatmap == nil ? "\(base). 이 모델은 영역 표시를 제공하지 않습니다." : "\(base). 판독 표시 \(showOverlay ? "켜짐" : "꺼짐"). 길게 누르면 원본."
+        if heatmap == nil {
+            return "\(base). 이 모델은 영역 표시를 제공하지 않습니다."
+        }
+        if !hasOriginal {
+            return "\(base) 판독 표시. 원본은 기록에 보관되지 않습니다."
+        }
+        return "\(base). 판독 표시 \(showOverlay ? "켜짐" : "꺼짐"). 길게 누르면 원본."
     }
 
     private func timestamp(_ seconds: Double) -> String {
@@ -394,10 +406,13 @@ struct WaveformView: View {
 // MARK: - 타임라인
 
 /// 서버 `startSec/endSec` 를 마커로 그린다. 누르면 그 지점으로 시크하고 구간 문장을 보여준다.
+///
+/// `canSeek == false`(원본 미디어 없는 서버 기록)면 재생 막대를 숨기고, 누르면 구간 설명만 보여준다.
 struct EvidenceTimelineView: View {
     let segments: [EvidenceItem]
     let duration: Double
     let currentTime: Double
+    var canSeek = true
     var onSeek: (Double) -> Void
 
     @State private var selected: EvidenceItem?
@@ -443,11 +458,13 @@ struct EvidenceTimelineView: View {
                         }
                     }
 
-                    Rectangle()
-                        .fill(Color.primary)
-                        .frame(width: 2)
-                        .offset(x: CGFloat(min(max(currentTime, 0), effectiveDuration) / effectiveDuration) * w)
-                        .animation(.linear(duration: 0.1), value: currentTime)
+                    if canSeek {
+                        Rectangle()
+                            .fill(Color.primary)
+                            .frame(width: 2)
+                            .offset(x: CGFloat(min(max(currentTime, 0), effectiveDuration) / effectiveDuration) * w)
+                            .animation(.linear(duration: 0.1), value: currentTime)
+                    }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { location in
@@ -471,7 +488,7 @@ struct EvidenceTimelineView: View {
                     Text("\(format(range.lowerBound))~\(format(range.upperBound))초 · \(selected.title)")
                         .foregroundStyle(.primary)
                 } else {
-                    Text("붉은 구간을 누르면 그 지점으로 이동합니다")
+                    Text(canSeek ? "붉은 구간을 누르면 그 지점으로 이동합니다" : "붉은 구간을 누르면 설명이 표시됩니다")
                         .foregroundStyle(.secondary)
                 }
             }

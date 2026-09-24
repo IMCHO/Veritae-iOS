@@ -44,11 +44,11 @@ struct SwitchableAnalysisAPI: AnalysisAPI {
         AppConfig.isMockAnalysisAPIEnabled ? mock : live
     }
 
-    nonisolated func analyzeImage(_ file: UploadFile, accessToken: String) async throws -> ImageDetectionDTO {
+    nonisolated func analyzeImage(_ file: UploadFile, accessToken: String) async throws -> ImageAnalysisResponseDTO {
         try await current.analyzeImage(file, accessToken: accessToken)
     }
 
-    nonisolated func analyzeAudio(_ file: UploadFile, accessToken: String) async throws -> AudioDetectionDTO {
+    nonisolated func analyzeAudio(_ file: UploadFile, accessToken: String) async throws -> AudioAnalysisResponseDTO {
         try await current.analyzeAudio(file, accessToken: accessToken)
     }
 
@@ -61,6 +61,14 @@ struct SwitchableAnalysisAPI: AnalysisAPI {
     /// `mock` 을 `let` 으로 붙잡아 두는 이유다.
     nonisolated func job(id: String, accessToken: String) async throws -> AnalysisJobDTO {
         try await current.job(id: id, accessToken: accessToken)
+    }
+
+    nonisolated func records(accessToken: String) async throws -> [AnalysisRecordDTO] {
+        try await current.records(accessToken: accessToken)
+    }
+
+    nonisolated func report(accessToken: String) async throws -> AnalysisReportDTO {
+        try await current.report(accessToken: accessToken)
     }
 }
 

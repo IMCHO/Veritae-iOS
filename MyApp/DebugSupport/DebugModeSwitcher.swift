@@ -106,7 +106,7 @@ struct DebugModeSwitcher: View {
         await appState.authStore.debugClearTokens()
         AppConfig.isMockModeEnabled = toMock
         isMockMode = toMock
-        appState.records.removeAll()
+        appState.history.clear()
         withAnimation(.smooth) { appState.phase = .login }
     }
 
@@ -126,7 +126,7 @@ struct DebugModeSwitcher: View {
         isWorking = true
         defer { isWorking = false }
         await appState.authStore.debugClearTokens()
-        appState.records.removeAll()
+        appState.history.clear()
         withAnimation(.smooth) { appState.phase = .login }
     }
 

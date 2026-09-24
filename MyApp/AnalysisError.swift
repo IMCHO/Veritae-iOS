@@ -8,6 +8,9 @@ enum AnalysisError: LocalizedError, Sendable {
     /// "지원하지 않는 파일 형식입니다: image/heic" 같은 구체적 원인이 사라진다.
     case invalidFile(String)
     /// 502 `DETECTION_SERVICE_UNAVAILABLE` — 탐지 서버(별도 인프라) 호출 실패. 재시도 대상이다.
+    /// image/audio 에서는 "AI 탐지 실패"와 "사기감지 파이프라인 실패"가 모두 이 코드로 온다
+    /// (2026-09-24 명세). 사용자 문구("분석 서버에 연결할 수 없습니다")는 어느 쪽인지 말하지 않아
+    /// 둘 다 포괄한다 — 클라가 둘을 구분할 수단도 없다.
     case detectionServiceUnavailable
     /// 404 `ANALYSIS_JOB_NOT_FOUND` — 내 작업이 아니거나 사라짐. 진행 상태를 폐기해야 한다.
     case jobNotFound
@@ -21,10 +24,10 @@ enum AnalysisError: LocalizedError, Sendable {
     case server
     /// 영상 job이 FAILED로 끝난 경우 — 서버 `errorMessage`를 그대로 노출한다.
     ///
-    /// "얼굴 없음"과 일반 서버 오류를 **문자열 매칭으로 가르지 않는다.** 서버가 둘을 구분해
-    /// 두었지만 기계 판독 필드가 없어(불일치 보고서 M4) 문구 매칭이 유일한 수단인데, 그건
-    /// 서버가 문구를 다듬는 순간 조용히 깨진다. M4가 해소되면 그때 분기한다.
-    case jobFailed(String)
+    /// `retryable` 은 job `errorCode` 로만 정한다(`ANALYSIS_FAILED` → 같은 영상으로 재시도 가능).
+    /// 문구로는 분기하지 않는다 — 서버가 문구를 다듬는 순간 조용히 깨진다.
+    /// "얼굴 없음"은 더 이상 여기로 오지 않는다 — `COMPLETED` + `NO_FACE_DETECTED` 부분 결과다(ADR-0018).
+    case jobFailed(String, retryable: Bool)
     /// 그 외 — 미지 errorCode / 상태코드 폴백.
     case unknown(String)
 
@@ -90,7 +93,7 @@ enum AnalysisError: LocalizedError, Sendable {
         case .unsupportedInput(let message): message
         case .network: "네트워크에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."
         case .server: "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
-        case .jobFailed(let message): message
+        case .jobFailed(let message, _): message
         case .unknown(let message): message
         }
     }
@@ -101,7 +104,9 @@ enum AnalysisError: LocalizedError, Sendable {
         switch self {
         case .detectionServiceUnavailable, .network, .server, .jobNotFound, .unknown:
             true
-        case .invalidFile, .unsupportedInput, .sessionExpired, .jobFailed:
+        case .jobFailed(_, let retryable):
+            retryable
+        case .invalidFile, .unsupportedInput, .sessionExpired:
             false
         }
     }

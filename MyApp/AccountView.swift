@@ -6,6 +6,9 @@ struct AccountView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
+    /// 기록 목록의 정본은 서버다(ADR-0017). 로컬에 쌓아 둔 것이 아니다.
+    private var history: AnalysisHistoryStore { appState.history }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -21,14 +24,17 @@ struct AccountView: View {
             .navigationTitle("계정")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AnalysisRecord.ID.self) { id in
-                if let record = appState.records.first(where: { $0.id == id }) {
+                if let record = history.records?.first(where: { $0.id == id }) {
                     // 분석 직후 보던 것과 **같은 화면**을 다시 연다. 별도 상세 화면은 없다.
+                    // 서버 기록은 원본 미디어가 없어(`input == nil`) 판독 결과만으로 그려진다.
                     ResultView(record: record, showsCloseButton: false)
                         .navigationTitle("판독 결과")
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
         }
+        // 시트를 열 때마다 불러온다 — 방금 끝난 분석도 서버가 완료 기록으로 돌려주므로 따로 끼워 넣지 않는다.
+        .task { await history.load() }
     }
 
     // MARK: 프로필
@@ -73,28 +79,72 @@ struct AccountView: View {
                 .font(.title3.weight(.bold))
                 .padding(.horizontal, 4)
 
-            if appState.records.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "tray")
+            if let error = history.loadError {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 28, weight: .light))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
 
-                    Text("아직 분석 기록이 없습니다")
+                    Text(error.errorDescription ?? "분석 기록을 불러오지 못했습니다.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    if error.isRetryable {
+                        Button {
+                            Task { await history.load() }
+                        } label: {
+                            Text("다시 시도")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.glass)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 140)
+                .cardStyle()
+            } else if let records = history.records {
+                if records.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 28, weight: .light))
+                            .foregroundStyle(.secondary)
+
+                        Text("아직 분석 기록이 없습니다")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 140)
+                    .cardStyle()
+                } else {
+                    VStack(spacing: 10) {
+                        ForEach(records) { record in
+                            NavigationLink(value: record.id) {
+                                HistoryRow(record: record)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    // 서버가 최신 10건만 준다(페이지네이션 없음) — 오래된 기록이 "사라진" 것으로 보이지 않게 알린다.
+                    Text("최근 완료된 분석 10건까지 표시됩니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView()
+
+                    Text("분석 기록을 불러오고 있습니다…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 140)
                 .cardStyle()
-            } else {
-                VStack(spacing: 10) {
-                    ForEach(appState.records) { record in
-                        NavigationLink(value: record.id) {
-                            HistoryRow(record: record)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
             }
         }
     }
@@ -107,19 +157,20 @@ struct HistoryRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: record.input.kind.icon)
+            Image(systemName: record.modality.historyIcon)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.tint)
                 .frame(width: 40, height: 40)
                 .background(Color.accentColor.opacity(0.1), in: .circle)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(record.input.title)
+                // 서버 기록에는 파일명이 없다 — 무엇을 분석했는지(모달리티)로 제목을 단다.
+                Text(record.input?.title ?? record.modality.historyTitle)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                Text(record.date.formatted(date: .abbreviated, time: .shortened))
+                Text(record.date?.formatted(date: .abbreviated, time: .shortened) ?? "날짜 알 수 없음")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -127,17 +178,25 @@ struct HistoryRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text("AI \(record.aiProbability.formatted(.percent.precision(.fractionLength(0))))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(record.aiLevel.color)
+                // AI 판독이 없는 기록(얼굴 없는 영상 등)은 0% 로 보이면 "AI 아님"으로 읽힌다 — 따로 표시한다.
+                if let probability = record.aiProbability, let aiLevel = record.aiLevel {
+                    Text("AI \(probability.formatted(.percent.precision(.fractionLength(0))))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(aiLevel.color)
+                } else {
+                    Text("AI 판독 없음")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
 
-                // 사기 위험도는 서버에 판정 근거가 없으면 `nil`이다 — 그때는 줄을 아예 감춘다.
+                // 서버가 `scamDetection` 을 주지 않은 기록은 `nil` 이다(image/audio 는 "텍스트 없음", 영상은
+                // 명세가 의미를 정하지 않았다) — 이유는 말하지 않고 모델명으로 대신한다.
                 if let riskLevel = record.riskLevel {
-                    Text(riskLevel.label)
+                    Text("사기 위험 \(riskLevel.label)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(riskLevel.color)
-                } else {
-                    Text(record.model)
+                } else if let model = record.model {
+                    Text(model)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -149,6 +208,24 @@ struct HistoryRow: View {
         }
         .padding(14)
         .cardStyle()
+    }
+}
+
+private extension UploadFile.Kind {
+    var historyIcon: String {
+        switch self {
+        case .image: "photo"
+        case .audio: "waveform"
+        case .video: "video"
+        }
+    }
+
+    var historyTitle: String {
+        switch self {
+        case .image: "이미지 분석"
+        case .audio: "음성 분석"
+        case .video: "영상 분석"
+        }
     }
 }
 

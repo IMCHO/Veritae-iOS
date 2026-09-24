@@ -66,9 +66,8 @@ enum AppConfig {
 
     /// `-UseMockAnalysisAPI 1` 런치 인자 또는 화면에서 켠 목 모드.
     ///
-    /// 탐지 서버가 미배포라 기본 개발 경로다. `AnalysisStore.demoRiskLevel`도 이 값을 보고
-    /// 데모용 사기 위험도를 채운다 — Release에서는 이 프로퍼티 자체가 존재하지 않아
-    /// 근거 없는 위험도가 실사용자에게 노출될 수 없다.
+    /// 탐지 서버가 미배포라 기본 개발 경로다. 사기 위험도는 이제 서버(목에서는 `MockAnalysisAPI`)의
+    /// `scamDetection` 에서만 온다 — 이 플래그를 보고 값을 지어내는 코드는 없다.
     nonisolated static var isMockAnalysisAPIEnabled: Bool {
         UserDefaults.standard.bool(forKey: "UseMockAnalysisAPI") || isMockModeEnabled
     }

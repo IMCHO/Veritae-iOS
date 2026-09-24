@@ -47,14 +47,14 @@ struct AnalysisFlowView: View {
 
     /// 진행 중이던 영상 job이 있으면 이어서 폴링하고, 없으면 새로 분석한다.
     /// 모달을 닫았다 다시 열었을 때 같은 작업을 두 번 접수하지 않기 위한 분기다.
+    ///
+    /// 끝난 결과를 로컬 기록에 끼워 넣지 않는다 — 기록의 정본은 서버다(ADR-0017). 계정 화면이
+    /// 열릴 때 서버에서 불러오며, 방금 끝난 분석도 거기 포함된다.
     private func run() async {
         if store.pendingVideoJob != nil {
             await store.resumePendingVideoJobIfNeeded()
         } else {
             await store.analyze(input)
-        }
-        if case .finished(let record) = store.phase {
-            appState.records.insert(record, at: 0)
         }
     }
 }
@@ -201,8 +201,12 @@ struct ResultView: View {
     /// 이 구분이 없으면 "구간을 못 찾았다"를 "제공하지 않는다"로 잘못 말한다(실제로 그랬다).
     private var modelProvidesSegments: Bool { kind == .audio || kind == .video }
 
-    private var kind: UploadFile.Kind? { record.input.file?.kind }
+    /// 원본 미디어가 없는 서버 기록도 모달리티는 안다 — 화면 구성은 이것으로 고른다(ADR-0017).
+    private var kind: UploadFile.Kind { record.modality }
     private var hasTimeline: Bool { record.aiEvidence.contains { $0.timeRange != nil } }
+    /// 히어로에 그릴 것이 있는가. 서버 기록은 원본이 없어, 히트맵마저 없으면 히어로를 통째로 뺀다
+    /// (빈 회색 상자나 끝나지 않는 파형 로딩을 보이지 않는다).
+    private var hasHeroContent: Bool { record.input != nil || record.evidenceImage != nil }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -222,7 +226,9 @@ struct ResultView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     // 히어로 — 오버레이가 근거다. 원본 위에 히트맵, 토글·길게 눌러 비교.
-                    MediaHeroView(record: record, playback: playback, waveform: waveform, showOverlay: $showOverlay)
+                    if hasHeroContent {
+                        MediaHeroView(record: record, playback: playback, waveform: waveform, showOverlay: $showOverlay)
+                    }
 
                     if let playback, kind != .image {
                         Button {
@@ -235,8 +241,23 @@ struct ResultView: View {
                         .buttonStyle(.glass)
                     }
 
-                    // 게이지 — 숫자 하나가 아니라 구간 위의 바늘.
-                    ScoreGaugeView(score: record.aiProbability, level: record.aiLevel, model: record.model)
+                    // 게이지 — 숫자 하나가 아니라 구간 위의 바늘. AI 판독이 없으면(얼굴 없는 영상 등)
+                    // 게이지를 그리지 않는다 — 0% 바늘은 "AI 아님"이라는 거짓 판정이 된다(ADR-0018).
+                    if let probability = record.aiProbability, let aiLevel = record.aiLevel {
+                        ScoreGaugeView(score: probability, level: aiLevel, model: record.model ?? "")
+                    }
+
+                    // 서버가 준 부분 결과 사유(예: 얼굴 없음)를 그대로 보여준다. 문구로 분기하지 않는다.
+                    // 사유가 없어도 AI 판독이 빠졌으면 기본 안내가 뜬다(`displayedNotice`). 방금 결과와
+                    // 기록 상세가 이 같은 화면을 쓴다.
+                    if let notice = record.displayedNotice {
+                        Text(notice)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .cardStyle()
+                    }
 
                     // 사기 위험도는 서버에 판정 근거가 있을 때만. 있으면 **나란히** 둔다 — 평균 내지 않는다.
                     if let riskLevel = record.riskLevel {
@@ -252,11 +273,14 @@ struct ResultView: View {
                     // 시간 구간은 텍스트 카드가 아니라 타임라인 마커.
                     // 음성은 파형 자체가 타임라인이라 카드를 따로 두지 않는다. 영상은 히어로가
                     // 플레이어라 구간 마커를 아래에 둔다.
-                    if hasTimeline, kind == .video {
+                    // 원본이 없는 음성 기록은 파형(히어로)이 없으므로 같은 타임라인 카드로 구간을 보인다.
+                    if hasTimeline, kind == .video || (kind == .audio && record.input == nil) {
                         EvidenceTimelineView(
                             segments: record.aiEvidence.filter { $0.timeRange != nil },
                             duration: playback?.duration ?? 0,
-                            currentTime: playback?.currentTime ?? 0
+                            currentTime: playback?.currentTime ?? 0,
+                            // 원본 없는 서버 기록은 이동할 영상·음성이 없다 — 재생 막대·"이동" 문구를 뺀다.
+                            canSeek: record.input != nil
                         ) { t in
                             playback?.seek(to: t)
                         }
@@ -286,6 +310,14 @@ struct ResultView: View {
 
     @ViewBuilder
     private var legend: some View {
+        // 범례·"구간 없음" 안내는 전부 AI 판독에 대한 설명이다. AI 판독이 없으면 설명할 대상이 없다.
+        if record.aiProbability != nil {
+            aiLegend
+        }
+    }
+
+    @ViewBuilder
+    private var aiLegend: some View {
         let text: String? = {
             let hasHeatmap = record.evidenceImage != nil
             switch kind {
@@ -318,7 +350,7 @@ struct ResultView: View {
                 .padding(12)
                 .cardStyle()
         } else {
-            Text("이 모델(\(record.model))은 영역·구간 표시를 제공하지 않습니다. 위 확률만 참고해 주세요.")
+            Text("이 모델(\(record.model ?? "알 수 없음"))은 영역·구간 표시를 제공하지 않습니다. 위 확률만 참고해 주세요.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -328,7 +360,7 @@ struct ResultView: View {
     }
 
     private func setUpPlayback() async {
-        guard let file = record.input.file, file.kind != .image, playback == nil else { return }
+        guard let file = record.input?.file, file.kind != .image, playback == nil else { return }
         let ext = (file.filename as NSString).pathExtension.isEmpty
             ? (file.kind == .audio ? "m4a" : "mov")
             : (file.filename as NSString).pathExtension
@@ -336,12 +368,12 @@ struct ResultView: View {
         playback = controller
         if file.kind == .audio {
             // 선택 시점에 계산한 파형이 있으면 그대로 쓴다.
-            if let precomputed = record.input.waveform {
+            if let precomputed = record.input?.waveform {
                 waveform = precomputed
                 return
             }
             // 없으면 실제 샘플에서 계산한다.
-            let url = URL.temporaryDirectory.appending(path: "veritae-wave-\(record.id.uuidString).\(ext)")
+            let url = URL.temporaryDirectory.appending(path: "veritae-wave-\(UUID().uuidString).\(ext)")
             try? file.data.write(to: url)
             waveform = await WaveformLoader.load(url: url)
             try? FileManager.default.removeItem(at: url)
@@ -430,11 +462,11 @@ extension AnalysisStore {
 }
 
 extension AnalysisRecord {
-    /// 프리뷰용 샘플. 실서버 경로를 반영해 `riskLevel`은 `nil`, 근거는 서버 `Evidence`에서
-    /// 오는 형태(severity 없음)로 둔다.
+    /// 프리뷰용 샘플. 근거는 서버 `Evidence`에서 오는 형태(severity 없음)로 둔다.
     static var sample: AnalysisRecord {
         AnalysisRecord(
             date: .now,
+            modality: .video,
             input: AnalysisInput(kind: .video, title: "clip.mp4", subtitle: "영상", previewImage: nil),
             aiProbability: 0.82,
             summary: "AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인해 주세요.",

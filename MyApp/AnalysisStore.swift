@@ -7,8 +7,8 @@ import Observation
 /// 진행 중인 영상 `jobId`가 사라진다. 서버 작업은 계속 돌고 있으므로 그걸 잃으면 결과를
 /// 영원히 못 받는다.
 ///
-/// `phase` 전환만 발행하고 기록 보관은 하지 않는다 — `records`는 `AppState`가 계속 소유한다
-/// (ADR-0005의 관심사 분리와 같은 이유).
+/// `phase` 전환만 발행하고 기록 보관은 하지 않는다 — 기록의 정본은 서버이고, 목록은
+/// `AnalysisHistoryStore` 가 불러온다(ADR-0017).
 @MainActor
 @Observable
 final class AnalysisStore {
@@ -79,14 +79,28 @@ final class AnalysisStore {
                 let dto = try await authStore.withValidAccessToken { [api] token in
                     try await api.analyzeImage(file, accessToken: token)
                 }
-                phase = .finished(makeRecord(input: input, model: dto.model, score: dto.score, evidence: [], evidenceImageBase64: dto.evidenceImage))
+                phase = .finished(
+                    AnalysisRecord(
+                        modality: .image,
+                        input: input,
+                        ai: AIDetectionParts(dto.aiDetection),
+                        scam: dto.scamDetection
+                    )
+                )
 
             case .audio:
                 phase = .running(.uploading)
                 let dto = try await authStore.withValidAccessToken { [api] token in
                     try await api.analyzeAudio(file, accessToken: token)
                 }
-                phase = .finished(makeRecord(input: input, model: dto.model, score: dto.score, evidence: dto.evidence, evidenceImageBase64: nil))
+                phase = .finished(
+                    AnalysisRecord(
+                        modality: .audio,
+                        input: input,
+                        ai: AIDetectionParts(dto.aiDetection),
+                        scam: dto.scamDetection
+                    )
+                )
 
             case .video:
                 phase = .running(.uploading)
@@ -152,27 +166,12 @@ final class AnalysisStore {
             switch AnalysisJobStatusCode(rawValue: dto.status) {
             case .completed:
                 pendingVideoJob = nil
-                guard let detection = dto.aiDetection else {
-                    // COMPLETED인데 결과가 없다 — 계약 위반이다. 성공으로 위장하지 않는다.
-                    phase = .failed(.server)
-                    return
-                }
-                phase = .finished(
-                    makeRecord(
-                        input: input,
-                        model: detection.model,
-                        score: detection.score,
-                        evidence: detection.evidence,
-                        evidenceImageBase64: detection.evidenceImage
-                    )
-                )
+                phase = Self.completedPhase(for: dto, input: input)
                 return
 
             case .failed:
                 pendingVideoJob = nil
-                // 서버 `errorMessage`를 그대로 노출한다. "얼굴 없음"과 일반 오류를 문자열
-                // 매칭으로 가르지 않는다(불일치 보고서 M4).
-                phase = .failed(.jobFailed(dto.errorMessage ?? "영상 분석에 실패했습니다."))
+                phase = .failed(Self.failure(for: dto))
                 return
 
             case .pending:
@@ -189,55 +188,41 @@ final class AnalysisStore {
 
     // MARK: - 매핑
 
-    private func makeRecord(
-        input: AnalysisInput,
-        model: String,
-        score: Double,
-        evidence: [EvidenceDTO],
-        evidenceImageBase64: String?
-    ) -> AnalysisRecord {
-        AnalysisRecord(
-            date: .now,
-            input: input,
-            aiProbability: score,
-            summary: Self.summary(for: score),
-            aiEvidence: evidence.map(EvidenceItem.init(dto:)),
-            model: model,
-            evidenceImage: evidenceImageBase64.flatMap { Data(base64Encoded: $0) },
-            riskLevel: Self.demoRiskLevel(for: score),
-            riskEvidence: []
+    /// `COMPLETED` job → 결과 화면. **`status` 를 먼저 보고, 그다음 `aiDetection`/`scamDetection` 을
+    /// 각각 존재 여부로 판단한다**(서버 명시). `errorCode` 가 있어도 `COMPLETED` 면 실패가 아니다 —
+    /// `NO_FACE_DETECTED` 는 AI 판독만 빠진 정상 결과다. 분기는 `errorCode`/필드 존재로만 하고
+    /// `errorMessage` 문자열로는 하지 않는다(ADR-0018).
+    ///
+    /// 유일한 실패 경우: **둘 다 없고 사유(`errorCode`)도 없는** `COMPLETED`. 보여줄 것도, 비어 있는
+    /// 이유도 없어 계약 위반으로 본다 — 빈 결과 화면으로 성공을 위장하지 않는다.
+    /// 사유가 있으면(얼굴 없음 + 발화 없음처럼 둘 다 정상적으로 빈 영상) 사유 문구만 있는 결과로 끝낸다.
+    static func completedPhase(for dto: AnalysisJobDTO, input: AnalysisInput) -> Phase {
+        if dto.aiDetection == nil, dto.scamDetection == nil, dto.errorCode == nil {
+            return .failed(.server)
+        }
+        return .finished(
+            AnalysisRecord(
+                modality: .video,
+                input: input,
+                ai: dto.aiDetection.map { AIDetectionParts($0) },
+                scam: dto.scamDetection,
+                errorCode: dto.errorCode,
+                serverNotice: dto.errorMessage
+            )
         )
     }
 
-    /// 서버는 요약 문구를 주지 않는다. `score` 구간에서 확실히 말할 수 있는 것만 쓰고,
-    /// 출처·유포 이력처럼 **서버가 판단하지 않은 것은 쓰지 않는다.**
-    private static func summary(for score: Double) -> String {
-        switch score {
-        case ..<0.35:
-            "AI로 생성된 흔적이 뚜렷하지 않습니다. 다만 이 결과만으로 진위를 단정할 수는 없습니다."
-        case ..<0.7:
-            "판단이 어려운 구간입니다. AI 생성 가능성을 배제할 수 없으니 출처를 함께 확인해 주세요."
-        default:
-            "AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인해 주세요."
-        }
-    }
-
-    // TEMP-UNTIL-SERVER(demo-risk-level): 사기 판정 엔진이 붙으면 이 함수를 지우고
-    // `makeRecord` 의 `riskLevel:` 에 서버 값을 넣는다. `riskLevel` 프로퍼티 자체는 남긴다.
-    /// 목 모드에서만 데모용 사기 위험도를 만든다.
+    /// `FAILED` job → 오류. 서버 `errorMessage` 를 그대로 보여준다.
     ///
-    /// **Release에서는 `#if DEBUG`로 함수 본문이 사라져 항상 `nil`이다** — 서버에 사기 판정이
-    /// 없는 동안 근거 없는 위험도가 실사용자에게 노출되는 것을 컴파일 단계에서 막는다.
-    private static func demoRiskLevel(for score: Double) -> RiskLevel? {
-        #if DEBUG
-        guard AppConfig.isMockAnalysisAPIEnabled else { return nil }
-        return score > 0.7 ? .high : (score > 0.4 ? .medium : .low)
-        #else
-        return nil
-        #endif
+    /// 재시도 여부는 `errorCode` 로만 정한다. `ANALYSIS_FAILED` 는 명세상 "같은 영상으로 재시도 가능"
+    /// 이라 기존 실패 화면의 "다시 시도"(같은 입력으로 재접수)를 연다. 미지·부재 코드는 재시도로
+    /// 해결되는지 알 수 없어 열지 않는다(열린 집합 — 모르는 것을 약속하지 않는다).
+    static func failure(for dto: AnalysisJobDTO) -> AnalysisError {
+        let retryable = dto.errorCode.flatMap(AnalysisOutcomeCode.init(rawValue:)) == .analysisFailed
+        return .jobFailed(dto.errorMessage ?? "영상 분석에 실패했습니다.", retryable: retryable)
     }
 
-    private static func mapped(_ error: Error) -> AnalysisError {
+    static func mapped(_ error: Error) -> AnalysisError {
         switch error {
         case let apiError as AuthAPIError:
             AnalysisError(apiError: apiError)
@@ -254,7 +239,144 @@ final class AnalysisStore {
     }
 }
 
+// MARK: - DTO → AnalysisRecord
+
+/// 모달리티별 AI 판독 DTO 3종(image/audio/video)의 공통 부분. 분석 응답과 기록 항목이 같은
+/// 스키마를 서로 다른 키 이름으로 주므로, 매핑을 한 곳으로 모으기 위해 여기서 한 번 평탄화한다.
+struct AIDetectionParts {
+    let model: String
+    let score: Double
+    let evidence: [EvidenceDTO]
+    let evidenceImageBase64: String?
+
+    init(_ dto: ImageDetectionDTO) {
+        self.init(model: dto.model, score: dto.score, evidence: [], evidenceImageBase64: dto.evidenceImage)
+    }
+
+    init(_ dto: AudioDetectionDTO) {
+        self.init(model: dto.model, score: dto.score, evidence: dto.evidence, evidenceImageBase64: nil)
+    }
+
+    init(_ dto: VideoDetectionDTO) {
+        self.init(model: dto.model, score: dto.score, evidence: dto.evidence, evidenceImageBase64: dto.evidenceImage)
+    }
+
+    init(model: String, score: Double, evidence: [EvidenceDTO], evidenceImageBase64: String?) {
+        self.model = model
+        self.score = score
+        self.evidence = evidence
+        self.evidenceImageBase64 = evidenceImageBase64
+    }
+}
+
+extension AnalysisRecord {
+    /// 분석 응답·기록 항목 공통 매핑. 방금 끝난 분석(`input` 있음)과 서버 기록(`input == nil`)이 같은 경로를 탄다.
+    ///
+    /// - `ai == nil`: AI 판독 없음 → `aiProbability == nil`, 사유 문구를 `notice` 로(ADR-0018).
+    /// - `scam == nil`: 키 부재 → `riskLevel == nil`, 카드 숨김(이유는 말하지 않는다 — 영상은 의미 미확정).
+    init(
+        id: String = UUID().uuidString,
+        date: Date? = .now,
+        modality: UploadFile.Kind,
+        input: AnalysisInput?,
+        ai: AIDetectionParts?,
+        scam: ScamDetectionDTO?,
+        errorCode: String? = nil,
+        serverNotice: String? = nil
+    ) {
+        self.init(
+            id: id,
+            date: date,
+            modality: modality,
+            input: input,
+            aiProbability: ai?.score,
+            summary: ai.map { Self.summary(for: $0.score) },
+            aiEvidence: (ai?.evidence ?? []).map { EvidenceItem(dto: $0) },
+            model: ai?.model,
+            evidenceImage: ai?.evidenceImageBase64.flatMap { Data(base64Encoded: $0) },
+            riskLevel: scam.map { RiskLevel(score: $0.score) },
+            riskEvidence: (scam?.evidence ?? []).map { EvidenceItem(scam: $0) },
+            notice: serverNotice ?? (ai == nil ? Self.missingAINotice(errorCode: errorCode) : nil)
+        )
+    }
+
+    /// 서버 기록 항목 → `AnalysisRecord`. **미지 `modality` 면 `nil`** — 호출자가 목록에서 건너뛴다.
+    /// 어느 detection 필드를 읽을지는 `modality` 가 정한다(서버 명시). 나머지 두 필드는 보지 않는다.
+    init?(server dto: AnalysisRecordDTO) {
+        guard let code = AnalysisModalityCode(rawValue: dto.modality) else { return nil }
+        let modality: UploadFile.Kind
+        let ai: AIDetectionParts?
+        switch code {
+        case .image:
+            modality = .image
+            ai = dto.imageDetection.map { AIDetectionParts($0) }
+        case .audio:
+            modality = .audio
+            ai = dto.audioDetection.map { AIDetectionParts($0) }
+        case .video:
+            modality = .video
+            ai = dto.videoDetection.map { AIDetectionParts($0) }
+        }
+        self.init(
+            id: dto.id,
+            date: Self.parseServerDate(dto.createdAt),
+            modality: modality,
+            input: nil,
+            ai: ai,
+            scam: dto.scamDetection,
+            errorCode: dto.errorCode,
+            // 기록 항목에는 `errorMessage` 가 없다 — 사유 문구는 `errorCode` 에서 고른다.
+            serverNotice: nil
+        )
+    }
+
+    /// RFC 3339(소수 초 유무 모두). 실패하면 `nil` — 표시만 "날짜 알 수 없음"으로 바뀐다.
+    /// `ISO8601DateFormatter` 는 소수 초 옵션 유무에 따라 **한쪽 형식만** 받는다(실측) — Spring 의
+    /// `Instant` 는 소수 초를 붙여 직렬화하는 경우가 흔해서 둘 다 받는 파서를 쓴다.
+    static func parseServerDate(_ raw: String) -> Date? {
+        try? Date(raw, strategy: .iso8601)
+    }
+
+    /// AI 판독이 비었는데 서버 문구가 없을 때(기록 항목, 또는 job 이 문구를 빼먹은 경우)의 안내.
+    /// `errorCode` 로만 고른다 — 미지 코드는 일반 문구로 떨어진다.
+    static func missingAINotice(errorCode: String?) -> String {
+        switch errorCode.flatMap(AnalysisOutcomeCode.init(rawValue:)) {
+        case .noFaceDetected:
+            "영상에서 얼굴을 찾지 못해 AI 판독은 제공되지 않았습니다."
+        case .analysisFailed, .none:
+            "이 분석에는 AI 판독 결과가 없습니다."
+        }
+    }
+
+    /// 서버는 요약 문구를 주지 않는다. `score` 구간에서 확실히 말할 수 있는 것만 쓰고,
+    /// 출처·유포 이력처럼 **서버가 판단하지 않은 것은 쓰지 않는다.**
+    private static func summary(for score: Double) -> String {
+        switch RiskLevel(score: score) {
+        case .low:
+            "AI로 생성된 흔적이 뚜렷하지 않습니다. 다만 이 결과만으로 진위를 단정할 수는 없습니다."
+        case .medium:
+            "판단이 어려운 구간입니다. AI 생성 가능성을 배제할 수 없으니 출처를 함께 확인해 주세요."
+        case .high:
+            "AI로 생성되었을 가능성이 높습니다. 공유하거나 신뢰하기 전에 출처를 확인해 주세요."
+        }
+    }
+}
+
 extension EvidenceItem {
+    /// 서버 `scamDetection.evidence[]` → UI 근거 항목.
+    ///
+    /// `severity` 를 채운다 — AI 판독 근거와 달리 **서버가 문장별 `score` 를 준다.** 지어낸 값이 아니다.
+    /// 구간 정보는 없다(`timeRange == nil`).
+    init(scam dto: ScamEvidenceDTO) {
+        self.init(
+            icon: "text.quote",
+            title: dto.sentence,
+            detail: dto.sentence,
+            severity: RiskLevel(score: dto.score),
+            timeRange: nil
+        )
+    }
+
     /// 서버 `Evidence` → UI 근거 항목.
     ///
     /// `severity`는 항상 `nil`이다 — 서버가 심각도를 주지 않으므로 전체 점수에서 역산해
